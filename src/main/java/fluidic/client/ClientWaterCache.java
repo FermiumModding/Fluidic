@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Mod.EventBusSubscriber(modid = Fluidic.MODID, value = Side.CLIENT)
 public final class ClientWaterCache {
 
-    private static final int ALL_BORDERS = 0x3F;
+    private static final int ALL_BORDERS = (1 << 27) - 1;
 
     /** Most ticks settled water keeps its simulated drawing while waiting for the chunk to redraw with the new blocks */
     private static final int SETTLE_OVERLAP_TICKS = 60;
@@ -109,12 +109,8 @@ public final class ClientWaterCache {
             int a = old == null ? 0 : old[i] & 255, b = heights == null ? 0 : heights[i] & 255;
             if(a == b) continue;
             int x = i & 15, y = i >> 8, z = (i >> 4) & 15;
-            if(y == 0) borders |= 1 << Water.DOWN;
-            if(y == 15) borders |= 1 << Water.UP;
-            if(z == 0) borders |= 1 << Water.NORTH;
-            if(z == 15) borders |= 1 << Water.SOUTH;
-            if(x == 0) borders |= 1 << Water.WEST;
-            if(x == 15) borders |= 1 << Water.EAST;
+            // Cells on the edge are drawn against the sections beside them, diagonal ones too since corners are shared
+            if(x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15) borders |= WaterRenderer.around(x, y, z);
             // Settled water culls its faces against simulated water, redraw it when water appears or vanishes
             if(ForgeConfigHandler.client.renderWater && (a == 0) != (b == 0) && besideSettledWater(mc, pos, ox + x, oy + y, oz + z)) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);

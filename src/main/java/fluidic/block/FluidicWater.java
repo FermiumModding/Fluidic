@@ -122,11 +122,19 @@ public final class FluidicWater {
 
     /** Height of the still surface at a corner, as water that does not continue up draws it */
     private static float surfaceCorner(IBlockAccess world, BlockPos corner) {
+        // Simulated water moves all the time but water blocks are only redrawn when it appears or vanishes beside
+        // them. Corners touching a water block leave it out, so the shared corner never goes stale and opens a gap.
+        boolean blocks = false;
+        for(int j = 0; j < 4; j++) {
+            blocks |= world.getBlockState(corner.add(-(j & 1), 0, -(j >> 1 & 1))).getMaterial().isLiquid();
+        }
         float sum = 0.0F;
         int count = 0;
         boolean column = false;
         for(int j = 0; j < 4; j++) {
-            float height = renderHeight(world, corner.add(-(j & 1), 0, -(j >> 1 & 1)));
+            BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
+            if(blocks && !world.getBlockState(cell).getMaterial().isLiquid() && simHeight(cell) > 0) continue;
+            float height = renderHeight(world, cell);
             if(height >= 1.0F) {
                 column = true;
                 continue;

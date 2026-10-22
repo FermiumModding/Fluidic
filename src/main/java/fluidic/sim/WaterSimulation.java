@@ -484,7 +484,10 @@ public final class WaterSimulation {
             if(section.rain != null && step % RAIN_RELEASE_STEPS == 0) section.releaseRain();
             if(section.dormant) {
                 section.idleSteps = 0;
-                if(step % EVAPORATE_STEPS == 0 && section.evaporate(random, evaporation)) section.dirtyNet = true;
+                if(step % EVAPORATE_STEPS == 0) {
+                    linkNeighbors(section);
+                    if(section.evaporate(random, evaporation)) section.dirtyNet = true;
+                }
             }
             else if(section.state == WaterSection.STATE_READY && section.filled > 0) {
                 section.idleSteps = 0;
@@ -590,10 +593,10 @@ public final class WaterSimulation {
             int level = Water.settleLevel(mass);
             // Shallow water around a flower stays simulated, it only washes the flower away above half a block
             if(code == WaterSection.WASHABLE && level > 0 && level <= Water.LEVELS / 2) continue;
-            // A water block cannot share a ladder or sign, water there stays simulated
-            if(code == WaterSection.PERMEABLE && level > 0) continue;
+            // A water block cannot share a ladder, sign or leaves, water there stays simulated and is drawn inside them
+            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS) && level > 0) continue;
             section.mass[i] = 0;
-            // Water caught in leaves soaks in
+            // Less than half a level dries up
             if(level > 0 && WaterSection.isOpen(code)) {
                 section.terrain[i] = (byte)(WaterSection.SETTLED + level);
                 result.settles.add(blockPos(section, i));
@@ -649,6 +652,9 @@ public final class WaterSimulation {
                 int ni = WaterSection.neighborIndex(i, dir);
                 long packed = WaterSection.packCell(ns.key, ni);
                 if(visited.contains(packed) || !isPoolSurface(ns, ni)) continue;
+                // Water still moving in another section is where the pool is being filled or drained from. Evening it
+                // out with the still part would pull its surface down every time a section beside it settles.
+                if(ns != start && WaterSection.isOpen(ns.terrain[ni]) && isMoving(ns)) continue;
                 visited.add(packed);
                 poolCells.add(packed);
             }
@@ -679,6 +685,11 @@ public final class WaterSimulation {
             }
         }
         return true;
+    }
+
+    /** Whether a section has not been still for half the steps water needs to settle */
+    private static boolean isMoving(WaterSection section) {
+        return !section.dormant && section.quietSteps < ForgeConfigHandler.server.settleSteps / 2;
     }
 
     /** A partly filled cell resting on something, simulated or settled, that belongs to a pool surface */
@@ -926,8 +937,9 @@ public final class WaterSimulation {
             int code = codes[dir];
             int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
             if(dir == Water.DOWN) {
-                wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR || code == WaterSection.POROUS
-                        || (WaterSection.isOpen(code) && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
+                // Leaves below take water until they are full of it
+                wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR
+                        || (WaterSection.holds(code) && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
                         || (code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS);
             }
             else if(dir == Water.UP) {
@@ -937,6 +949,10 @@ public final class WaterSimulation {
                 int mass = massAt(nx, ny, nz);
                 // Thin water stays on flat ground, but spills over the edge of a ledge
                 wake = mass == 0 ? level >= 2 || acceptsFalling(nx, ny - 1, nz) : level * Water.UNIT - mass > Water.WAKE_DIFF;
+            }
+            else if(code == WaterSection.POROUS) {
+                // A full block fills leaves beside it, like leaves under the surface of a pool
+                wake = level == Water.LEVELS && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF;
             }
             else if(code == WaterSection.SINK) {
                 wake = level >= 2;

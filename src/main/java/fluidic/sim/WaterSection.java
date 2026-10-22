@@ -211,11 +211,14 @@ final class WaterSection {
         dormant = filled > 0;
     }
 
-    /** Shallow water left in a dormant section slowly dries up, returns whether anything changed */
+    /**
+     * Water left in a dormant section, shallow water around plants and water held in leaves, slowly dries up.
+     * Not under more water, leaves inside a pool stay full. Returns whether anything changed.
+     */
     boolean evaporate(java.util.Random rand, double chance) {
         boolean changed = false;
         for(int i = 0; i < 4096; i++) {
-            if(mass[i] > 0 && rand.nextDouble() < chance) {
+            if(mass[i] > 0 && !underWater(i) && rand.nextDouble() < chance) {
                 mass[i] = Math.max(0, mass[i] - Water.UNIT);
                 if(mass[i] == 0) filled--;
                 changed = true;
@@ -223,6 +226,20 @@ final class WaterSection {
         }
         if(filled == 0) dormant = false;
         return changed;
+    }
+
+    /** Whether water above a cell is falling into it */
+    private boolean isDrippedOn(int i) {
+        WaterSection up = neighborSection(i, Water.UP);
+        int ui = neighborIndex(i, Water.UP);
+        return holds(codeOf(up, ui)) && up.mass[ui] > 0;
+    }
+
+    private boolean underWater(int i) {
+        WaterSection up = neighborSection(i, Water.UP);
+        int ui = neighborIndex(i, Water.UP);
+        int code = codeOf(up, ui);
+        return code >= SETTLED || holds(code) && up.mass[ui] > 0;
     }
 
     // ---------------------------------------------------------------- addressing
@@ -307,8 +324,9 @@ final class WaterSection {
     private void flowCell(int i, int m, int step, double leafAbsorption) {
         int r = m;
 
-        // Leaves soak up some of the water dripping through them
-        if(terrain[i] == POROUS && leafAbsorption > 0.0D && random(step, i) < leafAbsorption) {
+        // Leaves soak up some of the water dripping into them from above. Not water that ran in from the side, leaves
+        // in the top layer of a pool would drain it, and not the water of a pool they are under.
+        if(terrain[i] == POROUS && m < Water.FULL - Water.SPREAD_DIFF && leafAbsorption > 0.0D && isDrippedOn(i) && random(step, i) < leafAbsorption) {
             int f = Math.min(r, Water.FULL / 16);
             addFlow(i, Water.DOWN, f, true);
             r -= f;
@@ -364,7 +382,9 @@ final class WaterSection {
             ns = neighborSection(i, dir);
             ni = neighborIndex(i, dir);
             code = codeOf(ns, ni);
-            if(isOpen(code)) {
+            // Leaves only take water from the side when they hold some already or this water is full, like leaves under
+            // the surface of a pool. Otherwise thin water would creep through tree tops.
+            if(isOpen(code) || code == POROUS && (ns.mass[ni] > 0 || r0 >= Water.FULL - Water.SPREAD_DIFF)) {
                 int n = ns.mass[ni];
                 if(ns.dormant && n - r0 > Water.SPREAD_DIFF) wakeSections.add(ns.key);
                 if(n == 0) dryMask |= 1 << dir;

@@ -61,18 +61,31 @@ public final class WaterRenderer {
 
     private WaterRenderer() {}
 
-    /** Marks a section for rebuilding, plus the neighbours whose shared border (bit per direction) changed */
+    /**
+     * Marks a section for rebuilding, plus the sections around it whose shared edge changed: a bit per offset,
+     * (dx + 1) * 9 + (dy + 1) * 3 + (dz + 1), see {@link #around}
+     */
     static void markDirty(long key, int borders) {
         DIRTY.add(key);
-        // Faces on the border depend on the neighbouring sections
         int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
-        for(int dir = 0; dir < 6; dir++) {
-            if((borders & (1 << dir)) == 0) continue;
-            int ny = sy + Water.DY[dir];
+        for(int bit = 0; bit < 27; bit++) {
+            if((borders & (1 << bit)) == 0 || bit == 13) continue;
+            int ny = sy + bit / 3 % 3 - 1;
             if(ny < 0 || ny > 15) continue;
-            long neighbor = Water.sectionKey(sx + Water.DX[dir], ny, sz + Water.DZ[dir]);
+            long neighbor = Water.sectionKey(sx + bit / 9 - 1, ny, sz + bit % 3 - 1);
             if(ClientWaterCache.hasSection(neighbor) || DISPLAY_LISTS.containsKey(neighbor)) DIRTY.add(neighbor);
         }
+    }
+
+    /** The sections a cell at local coordinates is drawn against, as bits for {@link #markDirty} */
+    static int around(int x, int y, int z) {
+        int bits = 0;
+        for(int dx = x == 0 ? -1 : 0; dx <= (x == 15 ? 1 : 0); dx++) {
+            for(int dy = y == 0 ? -1 : 0; dy <= (y == 15 ? 1 : 0); dy++) {
+                for(int dz = z == 0 ? -1 : 0; dz <= (z == 15 ? 1 : 0); dz++) bits |= 1 << ((dx + 1) * 9 + (dy + 1) * 3 + dz + 1);
+            }
+        }
+        return bits;
     }
 
     /** Marks a section for rebuilding this frame, simulated water beside a block that changed draws against it */
@@ -347,11 +360,20 @@ public final class WaterRenderer {
      * weigh more.
      */
     private static float corner(WorldClient world, int x, int y, int z, float fallback) {
+        // Corners touching water blocks follow the blocks alone, like FluidicWater.cornerHeight, the blocks are only
+        // redrawn when simulated water appears or vanishes beside them, not every time it moves
+        boolean blocks = false;
+        for(int dx = -1; dx <= 0; dx++) {
+            for(int dz = -1; dz <= 0; dz++) blocks |= isLiquid(world, x + dx, y, z + dz);
+        }
         float sum = 0.0F;
         int count = 0, columns = 0;
         for(int dx = -1; dx <= 0; dx++) {
             for(int dz = -1; dz <= 0; dz++) {
-                float s = surface(world, x + dx, y, z + dz);
+                float s;
+                if(isLiquid(world, x + dx, y, z + dz)) s = liquidHeight(world, x + dx, y, z + dz);
+                else if(blocks && ClientWaterCache.height(x + dx, y, z + dz) > 0) continue;
+                else s = surface(world, x + dx, y, z + dz);
                 // Water continuing up, like a falling stream, does not drag the surface around it up
                 if(s >= 1.0F) {
                     columns++;

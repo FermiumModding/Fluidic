@@ -81,7 +81,7 @@ public class ForgeConfigHandler {
 				"  open      - like air, water settles there",
 				"  washable  - water flows through, the block breaks under more than half a block of water (flowers)",
 				"  permeable - water flows through at any depth without breaking the block (ladders, signs)",
-				"  porous    - water drips down through but never settles there (leaves)",
+				"  porous    - water drips down through, and fills it where it cannot drain, like leaves under a pool (leaves)",
 				"  solid     - blocks water",
 				"  rough     - blocks water, water runs slowly over it (grass, dirt)",
 				"  smooth    - blocks water, water runs quickly over it (stone, glass)",
