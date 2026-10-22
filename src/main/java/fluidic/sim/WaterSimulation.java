@@ -2,7 +2,7 @@ package fluidic.sim;
 
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
 import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -21,7 +21,6 @@ import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.util.Constants;
-import net.minecraftforge.fluids.BlockFluidBase;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -66,8 +65,15 @@ public final class WaterSimulation {
     private static final int REFRESHES_PER_STEP = 8;
     /** Steps between evaporation passes over dormant shallow water */
     private static final int EVAPORATE_STEPS = 200;
+    /** Steps between adding rain held back from water that keeps moving */
+    private static final int RAIN_RELEASE_STEPS = 200;
     /** Largest pool surface levelled in one go, bounds the cost of settling a section of a huge lake */
     private static final int MAX_POOL = 16384;
+    /**
+     * Times a settling section waits for the sections its pool surfaces reach. Puddles on flat ground join into one
+     * surface that can run on for many chunks, so after this it levels the part that is known instead.
+     */
+    private static final int MAX_LEVEL_WAITS = 2;
     private static final String SAVE_FILE = "fluidic_water.dat";
 
     // ---------------------------------------------------------------- server thread state
@@ -79,6 +85,12 @@ public final class WaterSimulation {
     private final ConcurrentLinkedQueue<StepResult> results = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean stepping = new AtomicBoolean();
     private final List<StepResult.Payload> latePayloads = new ArrayList<>();
+    /**
+     * Woken blocks, removed one step after their water went into the simulation so clients get the simulated water
+     * before the block disappears. Otherwise the pool shows a hole down to its floor for a moment.
+     */
+    private final LongArrayList removals = new LongArrayList();
+    private final LongOpenHashSet removing = new LongOpenHashSet();
 
     // ---------------------------------------------------------------- simulation thread state
 
@@ -100,6 +112,8 @@ public final class WaterSimulation {
     private final Random random = new Random();
     /** Daytime without rain, written by the server thread every tick */
     private volatile boolean sunny;
+    /** Raining or thundering, written by the server thread every tick */
+    private volatile boolean raining;
 
     // Statistics written by the simulation thread
     private volatile int statSections;
@@ -140,16 +154,22 @@ public final class WaterSimulation {
         enqueue(sim -> sim.doAddWater(x, y, z, amount, true));
     }
 
+    public void addRain(BlockPos pos, int amount) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        enqueue(sim -> sim.doAddWater(x, y, z, amount, true, true));
+    }
+
     public void setTerrain(BlockPos pos, byte code) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         enqueue(sim -> sim.doSetTerrain(x, y, z, code));
     }
 
     /** A settled water block saw a neighbour change, the simulation decides whether it has to start flowing again */
-    public void neighborChanged(BlockPos pos, int level) {
+    public void neighborChanged(BlockPos pos, int level, boolean reservoir) {
+        if(isRemoving(pos)) return;
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         byte[] codes = Terrain.neighbors(world, pos);
-        enqueue(sim -> sim.doNeighborCheck(x, y, z, level, codes));
+        enqueue(sim -> sim.doNeighborCheck(x, y, z, level, reservoir, codes));
     }
 
     public void chunkLoaded(int cx, int cz) {
@@ -167,6 +187,7 @@ public final class WaterSimulation {
     /** Applies finished steps and starts the next one if the simulation is idle */
     public void tick() {
         sunny = world.isDaytime() && !world.isRaining();
+        raining = world.isRaining();
         for(StepResult.Payload payload : latePayloads) send(payload);
         latePayloads.clear();
 
@@ -181,6 +202,8 @@ public final class WaterSimulation {
     public void save() {
         StepResult finished;
         while((finished = results.poll()) != null) apply(finished);
+        // Their water is saved with the simulation, the blocks must not be saved too
+        removeWoken();
         try {
             writeSaveFile(executor.submit(this::serialize).get(10, TimeUnit.SECONDS));
         }
@@ -210,6 +233,8 @@ public final class WaterSimulation {
     }
 
     private void apply(StepResult step) {
+        // This step added the water of blocks woken by the last one, and its payloads carry it
+        removeWoken();
         for(int n = 0; n < step.terrainRequests.size(); n++) {
             long key = step.terrainRequests.getLong(n);
             byte[] terrain = Terrain.snapshot(world, Water.keyX(key), Water.keyY(key), Water.keyZ(key));
@@ -227,7 +252,7 @@ public final class WaterSimulation {
             IBlockState state = world.getBlockState(pos);
             // Breaks with drops and effects, and updates neighbours so the other half of tall plants goes too
             if(Terrain.isWashable(state)) world.destroyBlock(pos, true);
-            else setTerrain(pos, Terrain.classify(state));
+            else setTerrain(pos, Terrain.classify(world, pos, state));
         }
 
         for(int n = 0; n < step.touches.size(); n++) {
@@ -236,7 +261,7 @@ public final class WaterSimulation {
             // The block rechecks its surroundings as if water had been placed beside it, concrete powder hardens
             IBlockState state = world.getBlockState(pos);
             state.getBlock().neighborChanged(state, world, pos, Blocks.WATER, pos);
-            setTerrain(pos, Terrain.classify(world.getBlockState(pos)));
+            setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
         }
 
         for(int n = 0; n < step.settles.size(); n++) {
@@ -245,8 +270,8 @@ public final class WaterSimulation {
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
             int flags = 2;
-            if(state.getBlock() == ModRegistry.SETTLED_WATER) {
-                level = Math.max(level, state.getValue(BlockFluidBase.LEVEL) + 1);
+            if(FluidicWater.isWater(state)) {
+                level = Math.max(level, FluidicWater.level(state));
             }
             else if(!Terrain.isOpen(state)) {
                 // Something moved in since the step ran, keep the water
@@ -259,32 +284,31 @@ public final class WaterSimulation {
                 state.getBlock().dropBlockAsItem(world, pos, state, 0);
                 flags = 3;
             }
-            world.setBlockState(pos, ModRegistry.SETTLED_WATER.getDefaultState().withProperty(BlockFluidBase.LEVEL, level - 1), flags);
-            setTerrain(pos, (byte)(WaterSection.SETTLED + level));
+            place(pos, FluidicWater.state(level), flags);
+            setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
         }
 
         for(int n = 0; n < step.relevels.size(); n++) {
             BlockPos pos = BlockPos.fromLong(step.relevels.getLong(n));
-            if(!world.isBlockLoaded(pos) || world.getBlockState(pos).getBlock() != ModRegistry.SETTLED_WATER) continue;
+            if(!world.isBlockLoaded(pos) || !FluidicWater.isWater(world.getBlockState(pos))) continue;
             int level = step.relevelLevels.getInt(n);
-            IBlockState state = level == 0 ? Blocks.AIR.getDefaultState() : ModRegistry.SETTLED_WATER.getDefaultState().withProperty(BlockFluidBase.LEVEL, level - 1);
-            world.setBlockState(pos, state, 2);
-            setTerrain(pos, Terrain.classify(state));
+            IBlockState state = level == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(level);
+            place(pos, state, 2);
+            setTerrain(pos, Terrain.classify(world, pos, state));
         }
 
         for(int n = 0; n < step.wakes.size(); n++) {
             BlockPos pos = BlockPos.fromLong(step.wakes.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
-            if(state.getBlock() == ModRegistry.SETTLED_WATER) {
-                int level = state.getValue(BlockFluidBase.LEVEL) + 1;
-                world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+            if(FluidicWater.isWater(state) && !FluidicWater.isReservoir(world, pos, state) && removing.add(pos.toLong())) {
+                removals.add(pos.toLong());
                 // The world listener is not told about changes in unpopulated chunks, so open the cell directly
                 setTerrain(pos, WaterSection.OPEN);
-                addWater(pos, level * Water.UNIT);
+                addWater(pos, FluidicWater.level(state) * Water.UNIT);
             }
             else {
-                setTerrain(pos, Terrain.classify(state));
+                setTerrain(pos, Terrain.classify(world, pos, state));
             }
         }
 
@@ -292,6 +316,27 @@ public final class WaterSimulation {
             if(payload.afterBlocks) latePayloads.add(payload);
             else send(payload);
         }
+    }
+
+    private void removeWoken() {
+        for(int n = 0; n < removals.size(); n++) {
+            BlockPos pos = BlockPos.fromLong(removals.getLong(n));
+            if(world.isBlockLoaded(pos) && FluidicWater.isWater(world.getBlockState(pos))) place(pos, Blocks.AIR.getDefaultState(), 2);
+        }
+        removals.clear();
+        removing.clear();
+    }
+
+    /** Whether the block is water that already went into the simulation and is about to be removed */
+    public boolean isRemoving(BlockPos pos) {
+        return removing.contains(pos.toLong());
+    }
+
+    /** Places a block for the simulation, water placed here is not reported back to it */
+    private void place(BlockPos pos, IBlockState state, int flags) {
+        FluidicWater.placing = true;
+        world.setBlockState(pos, state, flags);
+        FluidicWater.placing = false;
     }
 
     private void send(StepResult.Payload payload) {
@@ -428,12 +473,15 @@ public final class WaterSimulation {
         int refreshBudget = REFRESHES_PER_STEP;
         // Match the rate settled water dries at, a block gets a random tick about every 1365 ticks.
         // Dormant water is shallow water around plants, so it is a surface resting on soil, sky is not checked.
-        double evaporation = (config.evaporationChance * (sunny ? config.sunEvaporationMultiplier : 1.0D) + config.groundAbsorptionChance)
+        // Nothing evaporates in rain, the ground still soaks water up.
+        double evaporation = ((raining ? 0.0D : config.evaporationChance * (sunny ? config.sunEvaporationMultiplier : 1.0D)) + config.groundAbsorptionChance)
                 * EVAPORATE_STEPS / 1365.0D;
         ObjectIterator<WaterSection> iterator = sections.values().iterator();
         while(iterator.hasNext()) {
             WaterSection section = iterator.next();
             cells += section.filled;
+            // Rain held back from water that keeps moving is added now and then, so it does not stay hidden
+            if(section.rain != null && step % RAIN_RELEASE_STEPS == 0) section.releaseRain();
             if(section.dormant) {
                 section.idleSteps = 0;
                 if(step % EVAPORATE_STEPS == 0 && section.evaporate(random, evaporation)) section.dirtyNet = true;
@@ -520,6 +568,8 @@ public final class WaterSimulation {
 
     /** Turns a section that stopped moving into real blocks */
     private void settle(WaterSection section) {
+        // Rain held back while the water was moving joins it now, before it is levelled
+        section.releaseRain();
         overflow.clear();
         section.decompress(overflow);
         for(int n = 0; n < overflow.size(); n += 2) {
@@ -528,7 +578,11 @@ public final class WaterSimulation {
             overflowCells.add(overflow.getInt(n + 1));
         }
         // Waits for the terrain of neighbouring sections the pool reaches, so it is levelled as a whole
-        if(!levelSurfaces(section)) return;
+        if(!levelSurfaces(section, section.levelWaits < MAX_LEVEL_WAITS)) {
+            section.levelWaits++;
+            return;
+        }
+        section.levelWaits = 0;
         for(int i = 0; i < 4096; i++) {
             int mass = section.mass[i];
             if(mass == 0) continue;
@@ -556,17 +610,20 @@ public final class WaterSimulation {
      * equal cells from trading water forever leaves long pools with a slight slope, so the surface is evened out
      * directly before it becomes blocks. Surface cells of the same pool that already settled are re-levelled too.
      */
-    private boolean levelSurfaces(WaterSection section) {
+    private boolean levelSurfaces(WaterSection section, boolean wait) {
         visited.clear();
         boolean complete = true;
         for(int i = 0; i < 4096; i++) {
-            if(!visited.contains(WaterSection.packCell(section.key, i)) && isPoolSurface(section, i)) complete &= levelSurface(section, i);
+            if(!visited.contains(WaterSection.packCell(section.key, i)) && isPoolSurface(section, i)) complete &= levelSurface(section, i, wait);
         }
         return complete;
     }
 
-    /** Levels one pool surface, returns false without changing it when it reaches a section that has no terrain yet */
-    private boolean levelSurface(WaterSection start, int startIndex) {
+    /**
+     * Levels one pool surface. When it reaches a section that has no terrain yet it either returns false without
+     * changing it, to wait for that section, or levels the part it found.
+     */
+    private boolean levelSurface(WaterSection start, int startIndex, boolean wait) {
         poolCells.clear();
         long first = WaterSection.packCell(start.key, startIndex);
         visited.add(first);
@@ -582,8 +639,10 @@ public final class WaterSimulation {
                 WaterSection ns = WaterSection.crosses(i, dir) ? sections.get(section.neighborKey(dir)) : section;
                 if(ns == null || ns.state == WaterSection.STATE_PENDING) {
                     // Sections drop out of the simulation a while after they settle, the pool may continue there
-                    if(ns == null) poolMissing.add(section.neighborKey(dir));
-                    complete = false;
+                    if(wait) {
+                        if(ns == null) poolMissing.add(section.neighborKey(dir));
+                        complete = false;
+                    }
                     continue;
                 }
                 if(ns.state != WaterSection.STATE_READY) continue;
@@ -708,6 +767,17 @@ public final class WaterSimulation {
         return section != null && section.state == WaterSection.STATE_READY ? section : null;
     }
 
+    /** Whether water falling into a block would go on, as far as the simulation knows the block */
+    private boolean acceptsFalling(int x, int y, int z) {
+        WaterSection section = readySection(x, y, z);
+        if(section == null) return false;
+        int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        byte code = section.terrain[i];
+        if(code == WaterSection.SINK || code == WaterSection.RESERVOIR) return true;
+        if(WaterSection.holds(code)) return section.mass[i] < Water.FULL - Water.SPREAD_DIFF;
+        return code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS;
+    }
+
     private int massAt(int x, int y, int z) {
         WaterSection section = readySection(x, y, z);
         return section == null ? 0 : section.mass[Water.cellIndex(x & 15, y & 15, z & 15)];
@@ -716,24 +786,37 @@ public final class WaterSimulation {
     // ---------------------------------------------------------------- commands
 
     private void doAddWater(int x, int y, int z, int amount, boolean allowUp) {
+        doAddWater(x, y, z, amount, allowUp, false);
+    }
+
+    /**
+     * Adds water to a cell. Rain does not count as a change that keeps a section from settling, otherwise a section
+     * would never settle while it rains, and drops landing in a pool are held back until the pool settles instead
+     * of setting it rippling, see WaterSection.bankRain.
+     */
+    private void doAddWater(int x, int y, int z, int amount, boolean allowUp, boolean rain) {
         if(amount <= 0 || y < 0 || y > 255) return;
         long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
         WaterSection section = sections.get(key);
         if(section == null) section = createPending(key);
         if(section.state == WaterSection.STATE_PENDING) {
-            section.defer(() -> doAddWater(x, y, z, amount, allowUp));
+            section.defer(() -> doAddWater(x, y, z, amount, allowUp, rain));
             return;
         }
         if(section.state == WaterSection.STATE_FROZEN) return;
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
         if(WaterSection.holds(section.terrain[i])) {
+            if(rain && section.mass[i] > 0 && !section.dormant) {
+                section.bankRain(i, amount);
+                return;
+            }
             section.addMass(i, amount);
             section.wakeUp();
-            section.touched = true;
+            if(!rain) section.touched = true;
             section.dirtyNet = true;
         }
         else if(allowUp) {
-            doAddWater(x, y + 1, z, amount, false);
+            doAddWater(x, y + 1, z, amount, false, rain);
         }
     }
 
@@ -818,7 +901,7 @@ public final class WaterSimulation {
         }
     }
 
-    private void doNeighborCheck(int x, int y, int z, int level, byte[] codes) {
+    private void doNeighborCheck(int x, int y, int z, int level, boolean reservoir, byte[] codes) {
         WaterSection self = readySection(x, y, z);
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
         if(self != null && self.terrain[i] == WaterSection.WAKING) return;
@@ -828,12 +911,22 @@ public final class WaterSimulation {
             doSetTerrain(x + Water.DX[dir], y + Water.DY[dir], z + Water.DZ[dir], codes[dir]);
         }
 
+        if(reservoir) {
+            // Oceans never wake, they pour into open space beside and below them and keep it filled
+            for(int dir = 0; dir < 6; dir++) {
+                if(dir == Water.UP || !WaterSection.isOpen(codes[dir])) continue;
+                int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
+                if(massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF) doAddWater(nx, ny, nz, WaterSection.RESERVOIR_FLOW, false);
+            }
+            return;
+        }
+
         boolean wake = false;
         for(int dir = 0; dir < 6 && !wake; dir++) {
             int code = codes[dir];
             int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
             if(dir == Water.DOWN) {
-                wake = code == WaterSection.SINK || code == WaterSection.POROUS
+                wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR || code == WaterSection.POROUS
                         || (WaterSection.isOpen(code) && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
                         || (code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS);
             }
@@ -842,10 +935,15 @@ public final class WaterSimulation {
             }
             else if(WaterSection.isOpen(code)) {
                 int mass = massAt(nx, ny, nz);
-                wake = mass == 0 ? level >= 2 : level * Water.UNIT - mass > Water.WAKE_DIFF;
+                // Thin water stays on flat ground, but spills over the edge of a ledge
+                wake = mass == 0 ? level >= 2 || acceptsFalling(nx, ny - 1, nz) : level * Water.UNIT - mass > Water.WAKE_DIFF;
             }
             else if(code == WaterSection.SINK) {
                 wake = level >= 2;
+            }
+            else if(code == WaterSection.RESERVOIR) {
+                // Water beside an ocean fills up to its level
+                wake = level < Water.LEVELS;
             }
             else if(code >= WaterSection.SETTLED) {
                 wake = Math.abs(level - (code - WaterSection.SETTLED)) * Water.UNIT > Water.WAKE_DIFF;
@@ -870,6 +968,7 @@ public final class WaterSimulation {
     private NBTTagCompound serialize() {
         NBTTagList list = new NBTTagList();
         for(WaterSection section : sections.values()) {
+            section.releaseRain();
             if(section.filled == 0) continue;
             int[] cells = new int[section.filled * 2];
             int n = 0;

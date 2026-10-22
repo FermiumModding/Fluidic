@@ -25,8 +25,8 @@ final class WaterWorldListener implements IWorldEventListener {
     @Override
     public void notifyBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
         if(oldState == newState) return;
-        byte code = Terrain.classify(newState);
-        if(code != Terrain.classify(oldState)) simulation.setTerrain(pos, code);
+        byte code = Terrain.classify(world, pos, newState);
+        if(code != Terrain.classify(world, pos, oldState)) simulation.setTerrain(pos, code);
     }
 
     @Override

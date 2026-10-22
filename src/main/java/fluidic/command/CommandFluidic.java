@@ -8,7 +8,10 @@ import net.minecraft.command.CommandException;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.command.WrongUsageException;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.EnumSkyBlock;
+import net.minecraft.world.World;
 import net.minecraft.util.text.TextComponentString;
 
 import javax.annotation.Nonnull;
@@ -17,7 +20,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * /fluidic stats, /fluidic inspect x y z, /fluidic add x y z blocks [radius]
+ * /fluidic stats, /fluidic inspect x y z, /fluidic add x y z blocks [radius], /fluidic rain x y z blocks
  */
 public class CommandFluidic extends CommandBase {
 
@@ -30,7 +33,7 @@ public class CommandFluidic extends CommandBase {
     @Override
     @Nonnull
     public String getUsage(@Nonnull ICommandSender sender) {
-        return "/fluidic stats | /fluidic inspect <x> <y> <z> | /fluidic add <x> <y> <z> <blocks> [radius]";
+        return "/fluidic stats | /fluidic inspect <x> <y> <z> | /fluidic add <x> <y> <z> <blocks> [radius] | /fluidic rain <x> <y> <z> <blocks>";
     }
 
     @Override
@@ -49,7 +52,17 @@ public class CommandFluidic extends CommandBase {
         }
         else if(args[0].equals("inspect") && args.length >= 4) {
             BlockPos pos = parseBlockPos(sender, args, 1, false);
-            sender.sendMessage(new TextComponentString(pos.getX() + " " + pos.getY() + " " + pos.getZ() + ": block " + sender.getEntityWorld().getBlockState(pos) + ", " + simulation.inspect(pos)));
+            World world = sender.getEntityWorld();
+            IBlockState state = world.getBlockState(pos);
+            sender.sendMessage(new TextComponentString(pos.getX() + " " + pos.getY() + " " + pos.getZ() + ": block " + state
+                    + ", sky light " + world.getLightFor(EnumSkyBlock.SKY, pos) + ", block light " + world.getLightFor(EnumSkyBlock.BLOCK, pos)
+                    + ", blocks " + state.getLightOpacity(world, pos) + " light, " + simulation.inspect(pos)));
+        }
+        else if(args[0].equals("rain") && args.length >= 5) {
+            // Water the way a raindrop adds it, for testing how rain behaves without waiting for a storm
+            BlockPos pos = parseBlockPos(sender, args, 1, false);
+            double blocks = parseDouble(args[4], 0.0D, 64.0D);
+            simulation.addRain(pos, (int)Math.round(blocks * Water.FULL));
         }
         else if(args[0].equals("add") && args.length >= 5) {
             BlockPos center = parseBlockPos(sender, args, 1, false);
@@ -70,7 +83,7 @@ public class CommandFluidic extends CommandBase {
     @Override
     @Nonnull
     public List<String> getTabCompletions(@Nonnull MinecraftServer server, @Nonnull ICommandSender sender, @Nonnull String[] args, @Nullable BlockPos targetPos) {
-        if(args.length == 1) return getListOfStringsMatchingLastWord(args, "stats", "inspect", "add");
+        if(args.length == 1) return getListOfStringsMatchingLastWord(args, "stats", "inspect", "add", "rain");
         if(args.length >= 2 && args.length <= 4 && !args[0].equals("stats")) return getTabCompletionCoordinate(args, 1, targetPos);
         return Collections.emptyList();
     }

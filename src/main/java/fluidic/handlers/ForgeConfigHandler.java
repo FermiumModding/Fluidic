@@ -56,16 +56,16 @@ public class ForgeConfigHandler {
 		@Config.Comment("Chance per player loaded chunk per tick that a raindrop lands in it while it rains.")
 		@Config.Name("Rain Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
-		public double rainChance = 0.03D;
+		public double rainChance = 0.015D;
 
 		@Config.Comment("Multiplies the rain chance during thunderstorms.")
 		@Config.Name("Thunderstorm Rain Multiplier")
 		@Config.RangeDouble(min = 0.0D, max = 16.0D)
 		public double thunderMultiplier = 2.5D;
 
-		@Config.Comment("Sixteenths of a block of water each raindrop adds.")
+		@Config.Comment("Eighths of a block of water each raindrop adds, the smallest amount water blocks can hold.")
 		@Config.Name("Rain Amount")
-		@Config.RangeInt(min = 1, max = 16)
+		@Config.RangeInt(min = 1, max = 8)
 		public int rainAmount = 1;
 
 		@Config.Comment("Chance per simulation step that leaves holding water absorb up to a sixteenth of a block of it instead of letting it drip through.")
@@ -86,7 +86,7 @@ public class ForgeConfigHandler {
 				"  rough     - blocks water, water runs slowly over it (grass, dirt)",
 				"  smooth    - blocks water, water runs quickly over it (stone, glass)",
 				"  reactive  - blocks water, the block is updated when water touches it (concrete powder)",
-				"  sink      - water flowing in disappears (vanilla water)"})
+				"  sink      - water flowing in disappears (water of other mods)"})
 		@Config.Name("Block Classifications")
 		public String[] blockClassifications = {
 				"minecraft:ladder=permeable",
@@ -126,7 +126,7 @@ public class ForgeConfigHandler {
 				"minecraft:emerald_block=smooth"
 		};
 
-		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation.")
+		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation. Nothing evaporates while it rains or thunders.")
 		@Config.Name("Evaporation Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
 		public double evaporationChance = 0.1D;

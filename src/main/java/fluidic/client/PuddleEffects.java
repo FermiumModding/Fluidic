@@ -1,8 +1,9 @@
 package fluidic.client;
 
 import fluidic.Fluidic;
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
 import fluidic.sim.SimulatedWater;
+import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.state.IBlockState;
@@ -123,9 +124,7 @@ public final class PuddleEffects {
         int x = MathHelper.floor(entity.posX), y = MathHelper.floor(entity.posY + 0.01D), z = MathHelper.floor(entity.posZ);
         float depth = 0.0F;
         IBlockState state = world.getBlockState(POS.setPos(x, y, z));
-        if(state.getBlock() == ModRegistry.SETTLED_WATER) {
-            depth = (state.getValue(BlockFluidBase.LEVEL) + 1) / 16.0F;
-        }
+        if(FluidicWater.isWater(state)) depth = FluidicWater.level(state) / (float)Water.LEVELS;
         int height = SimulatedWater.height(world, x, y, z);
         if(height > 0) depth = Math.max(depth, height / 255.0F);
         // Deeper water is vanilla's, entities are in it

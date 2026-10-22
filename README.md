@@ -28,24 +28,32 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   moves the water serially, which is cheap, so flows crossing section borders cannot race.
 * **Terrain snapshots** (`Terrain`, `WaterWorldListener`). The simulation never touches the world. The
   server thread classifies blocks (open, washable like flowers, permeable like ladders, porous leaves, solid
-  with a friction, or vanilla water that water flowing in merges with) from the `Block Classifications`
+  with a friction, or water of other mods that water flowing in merges with) from the `Block Classifications`
   config, falling back to rules by material. It hands over whole-section snapshots and keeps them current
   through a world listener.
-* **Settling**. A section that stays quiet for `Settle Steps` steps becomes `fluidic:settled_water`
-  blocks, which have 16 levels and render with Forge's fluid model. It then leaves the simulation, so a
-  resting lake costs nothing. Settled blocks never flow on their own. When a neighbour changes, or simulated water
-  arrives at a different level, the simulation wakes them back up.
+* **Water blocks**. Vanilla water is replaced by Fluidic water under the same names (`minecraft:water`,
+  `minecraft:flowing_water`), so vanilla and other mods treat it as plain water. It never flows on its own.
+  Water blocks hold eighths of a block in vanilla's levels: level 0 is full, 1 to 7 hold 7/8 down to 1/8.
+* **Settling**. A section that stays quiet for `Settle Steps` steps becomes water blocks and leaves the
+  simulation, so a resting lake costs nothing. When a neighbour changes, or simulated water arrives at a
+  different level, the simulation wakes them back up. Water placed by anything else, like a bucket, starts
+  flowing the same way.
+* **Oceans and rivers**. Full water below sea level in ocean, river and beach biomes is an endless
+  reservoir: water flowing in disappears, and holes or caves opened beside or below it fill up from it,
+  so the sea never drains.
 * **Rain**. While it rains, random columns of player-loaded chunks get a drop. This is the same sampling
   vanilla uses to place snow. Thunderstorms drop more. Leaves absorb some of the water dripping through.
-* **Evaporation**. The surface of still water slowly evaporates, much faster in direct sun, and water
-  resting on soil soaks into the ground.
+* **Evaporation**. Puddles, shallow pools and partly filled surfaces slowly evaporate, much faster in
+  direct sun, and water resting on soil soaks into the ground. Nothing evaporates while it rains or
+  thunders, though soil keeps soaking water up. Lakes and oceans keep their water.
 * **Client rendering** (`WaterRenderer`). The server sends deflated per-cell heights of changed sections
   to players watching the chunk. The client compiles each section into a display list, with smoothed
   corner heights, and draws it after the world.
-* **Buckets**. An empty bucket scoops up a full block of settled water into a Fluidic water bucket, which
-  pours that block back as simulated water. Partly filled blocks cannot be scooped, so no water is created.
+* **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Only full
+  blocks can be scooped, so no water is created, and the vanilla infinite water source no longer works.
 * **Persistence**. Water still moving when the world saves is written to
-  `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks.
+  `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks. Settled water blocks
+  of earlier versions (`fluidic:settled_water`) are converted to water blocks as their chunks load.
 
 ## Commands
 

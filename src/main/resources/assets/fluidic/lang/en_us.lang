@@ -1,4 +1,2 @@
 tile.fluidic.settled_water.name=Water
 fluid.fluidic.water=Water
-item.fluidic.fluidic_bucket.name=Fluidic Water Bucket
-item.fluidic.fluidic_bucket.disabled=The water simulation is not running in this dimension

@@ -1,27 +1,21 @@
 package fluidic.handlers;
 
 import fluidic.Fluidic;
+import fluidic.block.FluidicWater;
 import fluidic.sim.SimManager;
 import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
-import net.minecraft.init.Blocks;
-import net.minecraft.init.Items;
-import net.minecraft.init.SoundEvents;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.SoundCategory;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
-import net.minecraftforge.event.entity.player.FillBucketEvent;
 import net.minecraftforge.event.world.ChunkEvent;
 import net.minecraftforge.event.world.ChunkWatchEvent;
 import net.minecraftforge.event.world.WorldEvent;
-import net.minecraftforge.fluids.BlockFluidBase;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.Event;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -78,31 +72,6 @@ public class ServerEventHandler {
         if(simulation != null) simulation.sendChunk(event.getPlayer().getUniqueID(), event.getChunk().x, event.getChunk().z);
     }
 
-    /**
-     * Empty buckets scoop up a full block of settled water into a Fluidic bucket, so the water stays finite.
-     * Vanilla would take a full bucket out of any level, partly filled blocks cannot be scooped.
-     */
-    @SubscribeEvent
-    public static void onFillBucket(FillBucketEvent event) {
-        RayTraceResult target = event.getTarget();
-        if(target == null || target.typeOfHit != RayTraceResult.Type.BLOCK || event.getEmptyBucket().getItem() != Items.BUCKET) return;
-        World world = event.getWorld();
-        BlockPos pos = target.getBlockPos();
-        IBlockState state = world.getBlockState(pos);
-        if(state.getBlock() != ModRegistry.SETTLED_WATER) return;
-        if(state.getValue(BlockFluidBase.LEVEL) + 1 < Water.LEVELS) {
-            event.setCanceled(true);
-            return;
-        }
-        // Neighbours are updated so the surrounding water flows into the hole
-        world.setBlockState(pos, Blocks.AIR.getDefaultState(), 11);
-        WaterSimulation simulation = SimManager.get(world);
-        if(simulation != null) simulation.setTerrain(pos, Terrain.classify(Blocks.AIR.getDefaultState()));
-        world.playSound(event.getEntityPlayer(), pos, SoundEvents.ITEM_BUCKET_FILL, SoundCategory.BLOCKS, 1.0F, 1.0F);
-        event.setFilledBucket(new ItemStack(ModRegistry.FLUIDIC_BUCKET));
-        event.setResult(Event.Result.ALLOW);
-    }
-
     /** Drops rain into random columns of the chunks around players, the same way vanilla places snow */
     private static void rain(WorldServer world, WaterSimulation simulation) {
         ForgeConfigHandler.ServerConfig config = ForgeConfigHandler.server;
@@ -130,21 +99,48 @@ public class ServerEventHandler {
         if(pos.getY() <= 0) return;
         BlockPos below = pos.down();
         IBlockState belowState = world.getBlockState(below);
-        if(Terrain.isSink(belowState)) return;
-        if(belowState.getBlock() == ModRegistry.SETTLED_WATER) {
-            // Rain on a settled pool raises it in place. Waking the block into the simulation for every drop
-            // would change it twice, redrawing the chunk each time. Uneven pools level out on random ticks.
-            int level = belowState.getValue(BlockFluidBase.LEVEL) + 1;
-            int levels = amount / Water.UNIT;
-            int raised = Math.min(Water.LEVELS, level + levels);
-            if(raised > level) {
-                IBlockState state = belowState.withProperty(BlockFluidBase.LEVEL, raised - 1);
-                world.setBlockState(below, state, 2);
-                simulation.setTerrain(below, Terrain.classify(state));
+        // Oceans and rivers swallow rain
+        if(Terrain.isSink(belowState) || FluidicWater.isReservoir(world, below, belowState)) return;
+        if(FluidicWater.isWater(belowState)) {
+            // Rain on a pool raises it in place. Waking the block into the simulation for every drop would change
+            // it twice, redrawing the chunk each time. Each level goes to the lowest of the block and its neighbours,
+            // raising one block by several levels would leave a step that wakes the pool on its next random tick.
+            BlockPos[] targets = new BlockPos[5];
+            int[] levels = new int[5];
+            int[] raised = new int[5];
+            int count = 0;
+            for(int k = 0; k < 5; k++) {
+                BlockPos target = k == 0 ? below : below.offset(EnumFacing.HORIZONTALS[k - 1]);
+                IBlockState state = k == 0 ? belowState : world.getBlockState(target);
+                if(!canRaise(world, simulation, target, state, k == 0)) continue;
+                targets[count] = target;
+                levels[count] = raised[count] = FluidicWater.level(state);
+                count++;
             }
-            amount -= (raised - level) * Water.UNIT;
+            while(amount >= Water.UNIT && count > 0) {
+                int lowest = 0;
+                for(int k = 1; k < count; k++) if(raised[k] < raised[lowest]) lowest = k;
+                if(raised[lowest] >= Water.LEVELS) break;
+                raised[lowest]++;
+                amount -= Water.UNIT;
+            }
+            for(int k = 0; k < count; k++) {
+                if(raised[k] == levels[k]) continue;
+                IBlockState state = FluidicWater.state(raised[k]);
+                FluidicWater.placing = true;
+                world.setBlockState(targets[k], state, 2);
+                FluidicWater.placing = false;
+                simulation.setTerrain(targets[k], Terrain.classify(state));
+            }
             if(amount <= 0) return;
         }
-        simulation.addWater(pos, amount);
+        simulation.addRain(pos, amount);
+    }
+
+    /** Surface water that rain can raise in place, not an ocean. The block the rain hit may have a plant above it. */
+    private static boolean canRaise(World world, WaterSimulation simulation, BlockPos pos, IBlockState state, boolean hit) {
+        if(!FluidicWater.isWater(state) || FluidicWater.isReservoir(world, pos, state) || simulation.isRemoving(pos)) return false;
+        IBlockState above = world.getBlockState(pos.up());
+        return hit && !above.getMaterial().isLiquid() || above.getMaterial() == Material.AIR;
     }
 }

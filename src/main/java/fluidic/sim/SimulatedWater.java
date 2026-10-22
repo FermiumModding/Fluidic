@@ -1,6 +1,7 @@
 package fluidic.sim;
 
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
+import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.EnumFacing;
@@ -30,8 +31,8 @@ public final class SimulatedWater {
     private static final double MIN_SLOPE = 1.0D / 32.0D;
     /** Surface slope at which the current pushes as hard as vanilla flowing water */
     private static final double FULL_SLOPE = 1.0D / 8.0D;
-    /** Surface of a full block of water as the client renders it, the same scale as Forge's fluid model */
-    private static final float RENDER_HEIGHT = Water.LEVELS / (Water.LEVELS + 1.0F);
+    /** Surface of a full block of water as the client renders it */
+    private static final float RENDER_HEIGHT = Water.RENDER_HEIGHT;
 
     private SimulatedWater() {}
 
@@ -72,7 +73,7 @@ public final class SimulatedWater {
                     double surface;
                     int height = height(world, x, y, z);
                     IBlockState state = world.getBlockState(pos.setPos(x, y, z));
-                    if(state.getBlock() == ModRegistry.SETTLED_WATER) surface = ModRegistry.SETTLED_WATER.getFilledPercentage(world, pos);
+                    if(state.getMaterial() == Material.WATER) surface = FluidicWater.isWater(state) ? FluidicWater.surface(world, pos, state) : 1.0D;
                     else if(height > 0) surface = surface(world, x, y, z, height);
                     else continue;
                     if(box.minY < y + surface) return true;

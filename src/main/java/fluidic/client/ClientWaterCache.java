@@ -1,23 +1,40 @@
 package fluidic.client;
 
+import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
 import fluidic.sim.Water;
 import net.minecraft.client.Minecraft;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.util.math.BlockPos;
+import net.minecraftforge.event.world.WorldEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraftforge.fml.relauncher.Side;
 
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Heights of simulated water received from the server, one byte per block (255 = full). Written on the client
  * thread; {@link #heightAnyThread} may also be read from chunk render threads, which draw settled water.
  */
+@Mod.EventBusSubscriber(modid = Fluidic.MODID, value = Side.CLIENT)
 public final class ClientWaterCache {
 
     private static final int ALL_BORDERS = 0x3F;
 
+    /** Most ticks settled water keeps its simulated drawing while waiting for the chunk to redraw with the new blocks */
+    private static final int SETTLE_OVERLAP_TICKS = 60;
+
     private static final ConcurrentHashMap<Long, byte[]> SECTIONS = new ConcurrentHashMap<>();
+    /** The heights sections switch to once the water that settled in them stops being drawn */
+    private static final Long2ObjectOpenHashMap<Deferred> DEFERRED = new Long2ObjectOpenHashMap<>();
     private static int dimension = Integer.MIN_VALUE;
+    private static int ticks;
 
     // Single entry lookup cache for the client thread, mesh building asks for the same section over and over
     private static long lastKey = Long.MIN_VALUE;
@@ -32,6 +49,54 @@ public final class ClientWaterCache {
             clear();
             dimension = packetDimension;
         }
+        // Water that settled into blocks keeps being drawn until the chunk is redrawn with the new blocks. That runs on
+        // worker threads and can take many ticks in busy weather, until then the cell would show a hole.
+        byte[] shown = heights;
+        byte[] current = SECTIONS.get(key);
+        if(current != null) {
+            int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
+            BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+            for(int i = 0; i < 4096; i++) {
+                if(current[i] == 0 || heights != null && heights[i] != 0) continue;
+                if(!FluidicWater.isWater(mc.world.getBlockState(pos.setPos(ox + (i & 15), oy + (i >> 8), oz + ((i >> 4) & 15))))) continue;
+                if(shown == heights) shown = heights == null ? new byte[4096] : heights.clone();
+                shown[i] = current[i];
+            }
+        }
+        Deferred pending = DEFERRED.get(key);
+        if(shown != heights) DEFERRED.put(key, new Deferred(heights, pending != null ? pending.since : ticks));
+        else if(pending != null) DEFERRED.remove(key);
+        show(key, shown);
+    }
+
+    @SubscribeEvent
+    public static void onWorldLoad(WorldEvent.Load event) {
+        if(event.getWorld().isRemote) event.getWorld().addEventListener(new ClientWorldListener());
+    }
+
+    @SubscribeEvent
+    public static void onClientTick(TickEvent.ClientTickEvent event) {
+        if(event.phase != TickEvent.Phase.END) return;
+        ticks++;
+        if(DEFERRED.isEmpty()) return;
+        if(Minecraft.getMinecraft().world == null) {
+            DEFERRED.clear();
+            return;
+        }
+        for(Iterator<Long2ObjectMap.Entry<Deferred>> it = DEFERRED.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
+            Long2ObjectMap.Entry<Deferred> entry = it.next();
+            Deferred deferred = entry.getValue();
+            // Until the blocks are drawn, at least a tick later. Without the render mixins nothing says so, then it times out.
+            if(ticks == deferred.since || !ChunkRedraws.upToDate(entry.getLongKey()) && ticks - deferred.since < SETTLE_OVERLAP_TICKS) continue;
+            // The fast iterator reuses its entry, read it before removing
+            long key = entry.getLongKey();
+            it.remove();
+            show(key, deferred.heights);
+        }
+    }
+
+    private static void show(long key, byte[] heights) {
+        Minecraft mc = Minecraft.getMinecraft();
         byte[] old = heights == null ? SECTIONS.remove(key) : SECTIONS.put(key, heights);
         if(old == null && heights == null) return;
         lastKey = Long.MIN_VALUE;
@@ -61,7 +126,7 @@ public final class ClientWaterCache {
     private static boolean besideSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {
         for(int dir = 0; dir < 6; dir++) {
             pos.setPos(x + Water.DX[dir], y + Water.DY[dir], z + Water.DZ[dir]);
-            if(mc.world.getBlockState(pos).getBlock() == ModRegistry.SETTLED_WATER) return true;
+            if(FluidicWater.isWater(mc.world.getBlockState(pos))) return true;
         }
         return false;
     }
@@ -69,13 +134,34 @@ public final class ClientWaterCache {
     public static void unloadChunk(int cx, int cz) {
         for(int sy = 0; sy < 16; sy++) {
             long key = Water.sectionKey(cx, sy, cz);
+            DEFERRED.remove(key);
             if(SECTIONS.remove(key) != null) WaterRenderer.markDirty(key, ALL_BORDERS);
         }
         lastKey = Long.MIN_VALUE;
     }
 
+    /** A block changed, simulated water beside it draws its faces and corners against it */
+    public static void blockChanged(BlockPos pos) {
+        ChunkRedraws.blockChanged(pos);
+        LongOpenHashSet dirty = null;
+        for(int dx = -1; dx <= 1; dx++) {
+            for(int dy = -1; dy <= 1; dy++) {
+                for(int dz = -1; dz <= 1; dz++) {
+                    int x = pos.getX() + dx, y = pos.getY() + dy, z = pos.getZ() + dz;
+                    if(height(x, y, z) == 0) continue;
+                    if(dirty == null) dirty = new LongOpenHashSet();
+                    dirty.add(Water.sectionKey(x >> 4, y >> 4, z >> 4));
+                }
+            }
+        }
+        // Rebuilt right away, the block may already be gone from the chunk drawn next to it
+        if(dirty != null) for(long key : dirty) WaterRenderer.markUrgent(key);
+    }
+
     public static void clear() {
         SECTIONS.clear();
+        DEFERRED.clear();
+        ChunkRedraws.clear();
         lastKey = Long.MIN_VALUE;
         lastSection = null;
         dimension = Integer.MIN_VALUE;
@@ -103,6 +189,16 @@ public final class ClientWaterCache {
             lastSection = SECTIONS.get(key);
         }
         return lastSection == null ? 0 : lastSection[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
+    }
+
+    private static final class Deferred {
+        final byte[] heights;
+        final int since;
+
+        Deferred(byte[] heights, int since) {
+            this.heights = heights;
+            this.since = since;
+        }
     }
 
     /** Height 0-255 of the water at a block position, safe from any thread */

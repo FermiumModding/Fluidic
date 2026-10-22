@@ -8,13 +8,15 @@
   "mixins": [
     "vanilla.BlockConcretePowderMixin",
     "vanilla.BlockFarmlandMixin",
-    "vanilla.BlockLilyPadMixin",
     "vanilla.BlockMixin",
     "vanilla.EntityBoatMixin",
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",
-    "vanilla.EntityXPOrbMixin",
-    "vanilla.ItemLilyPadMixin"
+    "vanilla.EntityXPOrbMixin"
+  ],
+  "client": [
+    "vanilla.BlockFluidRendererMixin",
+    "vanilla.RenderChunkMixin"
   ],
   "injectors": {
     "maxShiftBy": 10

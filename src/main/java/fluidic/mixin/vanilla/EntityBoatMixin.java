@@ -1,8 +1,7 @@
 package fluidic.mixin.vanilla;
 
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
 import fluidic.sim.SimulatedWater;
-import fluidic.sim.Water;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
@@ -10,7 +9,6 @@ import net.minecraft.entity.item.EntityBoat;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
-import net.minecraftforge.fluids.BlockFluidBase;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -47,10 +45,9 @@ public abstract class EntityBoatMixin {
         for(int x = minX; x < maxX; x++) {
             for(int y = minY; y < maxY; y++) {
                 for(int z = minZ; z < maxZ; z++) {
-                    if(boat.world.getBlockState(pos.setPos(x, y, z)).getBlock() != ModRegistry.SETTLED_WATER) continue;
-                    while(pos.getY() < 255 && boat.world.getBlockState(pos.up()).getBlock() == ModRegistry.SETTLED_WATER) pos.setY(pos.getY() + 1);
-                    IBlockState top = boat.world.getBlockState(pos);
-                    double surface = pos.getY() + (top.getValue(BlockFluidBase.LEVEL) + 1) / (Water.LEVELS + 1.0D);
+                    if(!FluidicWater.isWater(boat.world.getBlockState(pos.setPos(x, y, z)))) continue;
+                    while(pos.getY() < 255 && FluidicWater.isWater(boat.world.getBlockState(pos.up()))) pos.setY(pos.getY() + 1);
+                    double surface = pos.getY() + FluidicWater.surface(boat.world, pos, boat.world.getBlockState(pos));
                     if(Double.isNaN(level) || surface > level) level = surface;
                 }
             }
@@ -61,10 +58,10 @@ public abstract class EntityBoatMixin {
     }
 
     /**
-     * Boats under Fluidic water float up. Vanilla 1.12 boats stay down under water, and treat Fluidic water as
-     * flowing water since it is not a source block, which holds them down too. Reporting the boat as in water
-     * makes vanilla set the water level to the top of the boat and float it up at a steady rate until it
-     * surfaces. Boats under vanilla water keep vanilla's behaviour.
+     * Boats under water float up. Vanilla 1.12 boats stay down under water, and are held down under partly filled
+     * water, which vanilla takes for flowing water. Reporting the boat as in water makes vanilla set the water
+     * level to the top of the boat and float it up at a steady rate until it surfaces. Water of other mods keeps
+     * vanilla's behaviour.
      */
     @Inject(method = "getUnderwaterStatus", at = @At("RETURN"), cancellable = true)
     private void fluidic_underwaterStatus(CallbackInfoReturnable<EntityBoat.Status> cir) {
@@ -80,8 +77,8 @@ public abstract class EntityBoatMixin {
             for(int y = minY; y < maxY; y++) {
                 for(int z = minZ; z < maxZ; z++) {
                     IBlockState state = boat.world.getBlockState(pos.setPos(x, y, z));
-                    if(state.getBlock() == ModRegistry.SETTLED_WATER) {
-                        fluidic |= top < y + ModRegistry.SETTLED_WATER.getFilledPercentage(boat.world, pos);
+                    if(FluidicWater.isWater(state)) {
+                        fluidic |= top < y + FluidicWater.surface(boat.world, pos, state);
                     }
                     else if(state.getMaterial() == Material.WATER) {
                         return;

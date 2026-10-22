@@ -35,6 +35,16 @@ final class WaterSection {
      * can never settle there, so it stays simulated.
      */
     static final byte PERMEABLE = 9;
+    /**
+     * Full water of oceans and rivers, see FluidicWater.isReservoir. It is never woken or drained: water flowing
+     * in disappears, and open space next to or below it fills up from it.
+     */
+    static final byte RESERVOIR = 10;
+
+    /** Most water a cell takes in from a reservoir per step */
+    static final int RESERVOIR_FLOW = Water.FULL / 4;
+    private static final int FLOW_SINK = 8;
+    private static final int FLOW_SOURCE = 16;
     /** Settled water block, SETTLED + level (1-16) */
     static final byte SETTLED = 16;
 
@@ -69,6 +79,8 @@ final class WaterSection {
     /** Cells that emptied and still need to check their settled neighbours */
     private int drained;
     int quietSteps;
+    /** Times settling waited for neighbouring sections a pool surface reaches */
+    int levelWaits;
     int idleSteps;
     int refreshedStep;
     /**
@@ -158,6 +170,29 @@ final class WaterSection {
                 overflow.add(carry);
             }
         }
+    }
+
+    /** Rain held back per cell, see {@link #bankRain}, null while there is none */
+    int[] rain;
+
+    /**
+     * Holds back rain that fell into water still in motion. Every drop would set the water rippling and keep the
+     * section from settling for the whole storm, so the rain is added when the section settles, or now and then.
+     */
+    void bankRain(int i, int amount) {
+        if(rain == null) rain = new int[4096];
+        rain[i] += amount;
+    }
+
+    /** Adds the held back rain to the water, returns whether there was any */
+    boolean releaseRain() {
+        if(rain == null) return false;
+        for(int i = 0; i < 4096; i++) {
+            if(rain[i] > 0) addMass(i, rain[i]);
+        }
+        rain = null;
+        dirtyNet = true;
+        return true;
     }
 
     void wakeUp() {
@@ -274,7 +309,7 @@ final class WaterSection {
 
         // Leaves soak up some of the water dripping through them
         if(terrain[i] == POROUS && leafAbsorption > 0.0D && random(step, i) < leafAbsorption) {
-            int f = Math.min(r, Water.UNIT);
+            int f = Math.min(r, Water.FULL / 16);
             addFlow(i, Water.DOWN, f, true);
             r -= f;
             if(r == 0) return;
@@ -287,13 +322,16 @@ final class WaterSection {
         if(holds(code)) {
             int below = ns.mass[ni];
             int f = Water.stableBelow(r + below) - below;
+            // Between compressed cells only half the difference moves, a cell is evened out with the cells above and
+            // below it at once and full steps overshoot, so deep water would slosh up and down without ever settling
+            if(below >= Water.FULL && r >= Water.FULL) f /= 2;
             if(f > 0) {
                 f = Math.min(f, r);
                 addFlow(i, Water.DOWN, f, false);
                 r -= f;
             }
         }
-        else if(code == SINK) {
+        else if(code == SINK || code == RESERVOIR) {
             addFlow(i, Water.DOWN, r, true);
             return;
         }
@@ -313,6 +351,8 @@ final class WaterSection {
         ni = neighborIndex(i, Water.UP);
         int upCode = codeOf(ns, ni);
         if(upCode >= SETTLED && m < Water.FULL - Water.SPREAD_DIFF) wake(ns, ni);
+        // An ocean above pours in without ever draining
+        if(upCode == RESERVOIR && m < Water.FULL - Water.SPREAD_DIFF) addSource(i, Math.min(Water.FULL - m, RESERVOIR_FLOW));
 
         // Spread, wet neighbours equalize, dry neighbours only receive whole levels so thin films can't creep forever
         int r0 = r;
@@ -328,9 +368,10 @@ final class WaterSection {
                 int n = ns.mass[ni];
                 if(ns.dormant && n - r0 > Water.SPREAD_DIFF) wakeSections.add(ns.key);
                 if(n == 0) dryMask |= 1 << dir;
-                else if(n >= Water.FULL && r0 > n) {
-                    // Pressurized water passes on every difference, otherwise rounding swallows the pressure in a few cells
-                    int f = (r0 - n + 4) / 5;
+                else if(n >= Water.FULL && r0 - n > 1) {
+                    // Pressurized water passes on small differences too, otherwise rounding swallows the pressure in a few
+                    // cells. Rounded down, rounding up overshoots and full pools swing back and forth without ever settling.
+                    int f = Math.max(1, (r0 - n) / 5);
                     addFlow(i, dir, f, false);
                     out += f;
                 }
@@ -347,6 +388,17 @@ final class WaterSection {
                     out += f;
                 }
             }
+            else if(code == RESERVOIR) {
+                // Levels out with the full reservoir: water above its level runs into it, below it fills up from it
+                if(r0 > Water.FULL + Water.SPREAD_DIFF) {
+                    int f = (r0 - Water.FULL) / 5;
+                    addFlow(i, dir, f, true);
+                    out += f;
+                }
+                else if(r0 < Water.FULL - Water.SPREAD_DIFF) {
+                    addSource(i, Math.min(RESERVOIR_FLOW, Math.max(1, (Water.FULL - r0) * flowRate / 5000)));
+                }
+            }
             else if(code >= SETTLED) {
                 int settled = (code - SETTLED) * Water.UNIT;
                 if(Math.abs(r0 - settled) > Water.WAKE_DIFF) wake(ns, ni);
@@ -357,6 +409,7 @@ final class WaterSection {
             }
         }
         r -= out;
+        int spreadMask = 0;
         if(dryMask != 0 && r > Water.UNIT) {
             int f = Math.max(r0 * flowRate / 5000, Water.UNIT);
             int budget = r - Water.UNIT;
@@ -364,10 +417,22 @@ final class WaterSection {
                 int dir = 2 + ((start + k) & 3);
                 if((dryMask & (1 << dir)) != 0) {
                     addFlow(i, dir, f, false);
+                    spreadMask |= 1 << dir;
                     budget -= f;
                     r -= f;
                 }
             }
+        }
+        // Thin water stays put on flat ground, but at a ledge it runs over the edge however thin it is
+        for(int k = 0; k < 4 && r > 0; k++) {
+            int dir = 2 + ((start + k) & 3);
+            if((dryMask & ~spreadMask & (1 << dir)) == 0) continue;
+            ns = neighborSection(i, dir);
+            ni = neighborIndex(i, dir);
+            if(!isDrop(ns, ni)) continue;
+            int f = Math.min(r, Math.max(r0 * flowRate / 5000, Water.SPREAD_DIFF));
+            addFlow(i, dir, f, false);
+            r -= f;
         }
 
         // Pressure pushes compressed water up
@@ -375,9 +440,26 @@ final class WaterSection {
             ns = neighborSection(i, Water.UP);
             ni = neighborIndex(i, Water.UP);
             int f = r - Water.stableBelow(r + ns.mass[ni]);
+            if(ns.mass[ni] >= Water.FULL) f /= 2;
             if(f > 0) addFlow(i, Water.UP, Math.min(f, r), false);
         }
         else if(upCode < 0) blocked(upCode, Water.UP);
+    }
+
+    /**
+     * Whether water put into a dry cell would fall on, so the cell is the edge of a ledge. Only looks below cells
+     * of this section and below cells inside a neighbour, whose own neighbours are not linked.
+     */
+    private boolean isDrop(WaterSection ns, int ni) {
+        WaterSection below;
+        if(!crosses(ni, Water.DOWN)) below = ns;
+        else if(ns == this) below = neighbors[Water.DOWN];
+        else return false;
+        int bi = neighborIndex(ni, Water.DOWN);
+        int code = codeOf(below, bi);
+        if(code == SINK || code == RESERVOIR) return true;
+        if(holds(code)) return below.mass[bi] < Water.FULL - Water.SPREAD_DIFF;
+        return code >= SETTLED && code - SETTLED < Water.LEVELS;
     }
 
     /** A cell that just emptied lets settled water next to and above it flow in */
@@ -389,7 +471,8 @@ final class WaterSection {
             WaterSection ns = neighborSection(i, dir);
             int ni = neighborIndex(i, dir);
             int code = codeOf(ns, ni);
-            if(code >= SETTLED && (dir == Water.UP || code - SETTLED >= 2)) wake(ns, ni);
+            if(code == RESERVOIR) addSource(i, RESERVOIR_FLOW);
+            else if(code >= SETTLED && (dir == Water.UP || code - SETTLED >= 2)) wake(ns, ni);
             else if(ns != null && ns.dormant && ns.mass[ni] > 0) wakeSections.add(ns.key);
         }
     }
@@ -420,7 +503,15 @@ final class WaterSection {
 
     private void addFlow(int i, int dir, int amount, boolean sink) {
         if(flowCount + 2 > flowBuf.length) flowBuf = Arrays.copyOf(flowBuf, flowBuf.length * 2);
-        flowBuf[flowCount++] = (i << 4) | (sink ? 8 : 0) | dir;
+        flowBuf[flowCount++] = (i << 5) | (sink ? FLOW_SINK : 0) | dir;
+        flowBuf[flowCount++] = amount;
+    }
+
+    /** Water a cell takes in from a reservoir, which is not simulated and never runs out */
+    private void addSource(int i, int amount) {
+        if(amount <= 0) return;
+        if(flowCount + 2 > flowBuf.length) flowBuf = Arrays.copyOf(flowBuf, flowBuf.length * 2);
+        flowBuf[flowCount++] = (i << 5) | FLOW_SOURCE;
         flowBuf[flowCount++] = amount;
     }
 
@@ -431,15 +522,26 @@ final class WaterSection {
         for(int k = 0; k < flowCount; k += 2) {
             int e = flowBuf[k];
             int f = flowBuf[k + 1];
-            int i = e >> 4;
+            int i = e >> 5;
             int dir = e & 7;
-            removeMass(i, f);
-            noteFlow(f);
-            if((e & 8) == 0) {
-                WaterSection t = neighborSection(i, dir);
-                t.addMass(neighborIndex(i, dir), f);
-                t.noteFlow(f);
+            if((e & FLOW_SOURCE) != 0) {
+                addMass(i, f);
+                noteFlow(f);
+                continue;
             }
+            if((e & FLOW_SINK) != 0) {
+                removeMass(i, f);
+                noteFlow(f);
+                continue;
+            }
+            WaterSection t = neighborSection(i, dir);
+            int ti = neighborIndex(i, dir);
+            // Both cells stay full, so the flow only moves compression around below the surface
+            int noted = mass[i] - f >= Water.FULL && t.mass[ti] >= Water.FULL && f <= Water.QUIET_PRESSURE_FLOW ? Math.min(f, Water.QUIET_FLOW) : f;
+            removeMass(i, f);
+            noteFlow(noted);
+            t.addMass(ti, f);
+            t.noteFlow(noted);
         }
         flowCount = 0;
     }

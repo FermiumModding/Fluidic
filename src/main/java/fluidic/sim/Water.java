@@ -11,8 +11,10 @@ public final class Water {
 
     /** Mass of one full block of water. */
     public static final int FULL = 1024;
-    /** Number of block levels settled water is quantized to. */
-    public static final int LEVELS = 16;
+    /** Number of block levels settled water is quantized to, the eighths of vanilla water levels. */
+    public static final int LEVELS = 8;
+    /** Surface of a full block of water as vanilla renders it. */
+    public static final float RENDER_HEIGHT = LEVELS / (LEVELS + 1.0F);
     /** Mass of one settled level. */
     public static final int UNIT = FULL / LEVELS;
     /** Extra mass a cell may hold per cell of water above it, gives pressure so U-bends equalize. */
@@ -23,6 +25,11 @@ public final class Water {
     public static final int WAKE_DIFF = UNIT;
     /** A section counts as quiet for the step when no flow exceeds this. */
     public static final int QUIET_FLOW = 2;
+    /**
+     * The same for flows between two full cells. Compression rounding keeps deep water trading a little mass
+     * underneath forever, which settling decompresses away anyway.
+     */
+    public static final int QUIET_PRESSURE_FLOW = UNIT / 8;
     /** Cells holding less than this when settling evaporate instead of becoming a block. */
     public static final int SETTLE_MIN = UNIT / 4;
 

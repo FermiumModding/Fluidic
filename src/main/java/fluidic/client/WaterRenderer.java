@@ -2,7 +2,7 @@ package fluidic.client;
 
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
-import fluidic.handlers.ModRegistry;
+import fluidic.block.FluidicWater;
 import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -43,6 +43,7 @@ public final class WaterRenderer {
 
     private static final Long2IntOpenHashMap DISPLAY_LISTS = new Long2IntOpenHashMap();
     private static final LongLinkedOpenHashSet DIRTY = new LongLinkedOpenHashSet();
+    private static final LongLinkedOpenHashSet URGENT = new LongLinkedOpenHashSet();
     private static final BufferBuilder BUFFER = new BufferBuilder(1 << 16);
     private static final WorldVertexBufferUploader UPLOADER = new WorldVertexBufferUploader();
     private static final BlockPos.MutableBlockPos POS = new BlockPos.MutableBlockPos();
@@ -50,8 +51,10 @@ public final class WaterRenderer {
     private static final float INSET = 0.001F;
     /** Time per frame spent rebuilding meshes at most */
     private static final long REBUILD_NANOS = 2_000_000L;
-    /** Surface height of a full block of water in Forge's fluid model, which renders settled water */
-    private static final float FULL_HEIGHT = Water.LEVELS / (Water.LEVELS + 1.0F);
+    /** Time per frame spent on sections beside changed blocks at most */
+    private static final long URGENT_NANOS = 4_000_000L;
+    /** Surface height of a full block of water as vanilla renders it */
+    private static final float FULL_HEIGHT = Water.RENDER_HEIGHT;
 
     private static TextureAtlasSprite still;
     private static int red, green, blue;
@@ -72,10 +75,16 @@ public final class WaterRenderer {
         }
     }
 
+    /** Marks a section for rebuilding this frame, simulated water beside a block that changed draws against it */
+    static void markUrgent(long key) {
+        URGENT.add(key);
+    }
+
     static void clear() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
         DIRTY.clear();
+        URGENT.clear();
     }
 
     @SubscribeEvent
@@ -88,6 +97,14 @@ public final class WaterRenderer {
         still = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_still");
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
+        // Sections beside changed blocks go first and past the count, vanilla may draw the change in this same frame
+        long urgentDeadline = System.nanoTime() + URGENT_NANOS;
+        for(LongIterator it = URGENT.iterator(); it.hasNext() && System.nanoTime() < urgentDeadline; ) {
+            long key = it.nextLong();
+            it.remove();
+            DIRTY.remove(key);
+            rebuild(world, key);
+        }
         long deadline = System.nanoTime() + REBUILD_NANOS;
         for(LongIterator it = DIRTY.iterator(); it.hasNext() && budget > 0 && System.nanoTime() < deadline; budget--) {
             long key = it.nextLong();
@@ -213,11 +230,17 @@ public final class WaterRenderer {
         // Corner heights, shared with neighbouring cells so the surface is continuous. Water continuing up, like a
         // falling stream, is full height on its own and draws its sides down to the water around it
         boolean column = surface >= 1.0F;
-        float h00 = column ? 1.0F : corner(world, x, y, z, surface);
-        float h10 = column ? 1.0F : corner(world, x + 1, y, z, surface);
-        float h11 = column ? 1.0F : corner(world, x + 1, y, z + 1, surface);
-        float h01 = column ? 1.0F : corner(world, x, y, z + 1, surface);
-        // Water resting on a water block reaches down to that block's surface, which sits below the top of the block
+        // The corners as the water around shares them, a column's sides reach down to these
+        float s00 = corner(world, x, y, z, surface);
+        float s10 = corner(world, x + 1, y, z, surface);
+        float s11 = corner(world, x + 1, y, z + 1, surface);
+        float s01 = corner(world, x, y, z + 1, surface);
+        float h00 = column ? 1.0F : s00;
+        float h10 = column ? 1.0F : s10;
+        float h11 = column ? 1.0F : s11;
+        float h01 = column ? 1.0F : s01;
+        // Water resting on another mod's liquid reaches down to its surface, which sits below the top of the block.
+        // Fluidic water under simulated water fills its block to the top itself.
         float floor = ClientWaterCache.height(x, y - 1, z) == 0 ? Math.min(0.0F, liquidLevel(world, x, y - 1, z) - 1.0F) : 0.0F;
 
         if(surface < 1.0F) {
@@ -239,27 +262,45 @@ public final class WaterRenderer {
             added = true;
         }
 
-        added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, floor, sky, block);
-        added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, floor, sky, block);
-        added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, floor, sky, block);
-        added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, floor, sky, block);
+        added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, s00, s10, floor, column, sky, block);
+        added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, s11, s01, floor, column, sky, block);
+        added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, s01, s00, floor, column, sky, block);
+        added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, s10, s11, floor, column, sky, block);
         return added;
     }
 
     /**
-     * Side face towards neighbour (nx, y, nz), from the neighbour's water level, simulated or a water block, up
-     * to this cell's corners. Settled water blends its surface into simulated water, so the two meet there.
+     * Side face towards neighbour (nx, y, nz), up to this cell's corners. Next to other water, simulated or a water
+     * block, the surfaces meet at shared corners and no face is drawn, it would only show as a line through the
+     * water. Only water continuing up stands above the water beside it and draws a face down to its level.
+     * At a ledge, where the neighbour is empty with water below it, the face reaches down to that water like water
+     * running over the edge, instead of leaving the bank between the two showing.
      */
-    private static boolean side(WorldClient world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top0, float top1, float floor, int sky, int block) {
+    private static boolean side(WorldClient world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top0, float top1,
+                                float edge0, float edge1, float floor, boolean column, int sky, int block) {
         if(isOpaque(world, nx, y, nz)) return false;
         float neighbor = surface(world, nx, y, nz);
-        float bottom = neighbor >= 0.0F ? neighbor : floor;
-        if(top0 <= bottom && top1 <= bottom) return false;
+        if(neighbor >= 0.0F && (!column || neighbor >= 1.0F)) return false;
+        float bottom0, bottom1;
+        if(neighbor >= 0.0F) {
+            // The neighbour's surface slopes along the shared edge, the face follows it so no wedge stays open
+            bottom0 = Math.max(0.0F, edge0);
+            bottom1 = Math.max(0.0F, edge1);
+        }
+        else {
+            float bottom = floor;
+            if(!isSolid(world, nx, y, nz)) {
+                float below = surface(world, nx, y - 1, nz);
+                if(below >= 0.0F && below < 1.0F) bottom = Math.min(bottom, below - 1.0F);
+            }
+            bottom0 = bottom1 = bottom;
+        }
+        if(top0 <= bottom0 && top1 <= bottom1) return false;
         float u0 = still.getMinU(), u1 = still.getInterpolatedU(8.0D);
-        vertex(x0, ly + bottom, z0, u0, still.getInterpolatedV((1.0F - bottom) * 8.0F), sky, block);
-        vertex(x0, ly + Math.max(top0, bottom), z0, u0, still.getInterpolatedV((1.0F - top0) * 8.0F), sky, block);
-        vertex(x1, ly + Math.max(top1, bottom), z1, u1, still.getInterpolatedV((1.0F - top1) * 8.0F), sky, block);
-        vertex(x1, ly + bottom, z1, u1, still.getInterpolatedV((1.0F - bottom) * 8.0F), sky, block);
+        vertex(x0, ly + bottom0, z0, u0, still.getInterpolatedV((1.0F - bottom0) * 8.0F), sky, block);
+        vertex(x0, ly + Math.max(top0, bottom0), z0, u0, still.getInterpolatedV((1.0F - top0) * 8.0F), sky, block);
+        vertex(x1, ly + Math.max(top1, bottom1), z1, u1, still.getInterpolatedV((1.0F - top1) * 8.0F), sky, block);
+        vertex(x1, ly + bottom1, z1, u1, still.getInterpolatedV((1.0F - bottom1) * 8.0F), sky, block);
         return true;
     }
 
@@ -269,7 +310,7 @@ public final class WaterRenderer {
 
     /**
      * Rendered water level of a cell, simulated or a water block: -1 for no water, 1 when water continues above.
-     * Uses the same scale as Forge's fluid model so simulated and settled water meet.
+     * Uses the same scale as vanilla's fluid renderer so simulated water and water blocks meet.
      */
     private static float surface(WorldClient world, int x, int y, int z) {
         int height = ClientWaterCache.height(x, y, z);
@@ -283,9 +324,8 @@ public final class WaterRenderer {
         if(y < 0 || y > 255) return -1.0F;
         IBlockState state = world.getBlockState(POS.setPos(x, y, z));
         if(!state.getMaterial().isLiquid()) return -1.0F;
-        // Like settled water itself: only a water block above makes it a column, falling simulated water reaches down to it
-        if(isLiquid(world, x, y + 1, z)) return 1.0F;
-        if(state.getBlock() == ModRegistry.SETTLED_WATER) return (state.getValue(BlockFluidBase.LEVEL) + 1) / (Water.LEVELS + 1.0F);
+        // Like FluidicWater.renderHeight: water continuing up into a block or simulated water makes it a column
+        if(isLiquid(world, x, y + 1, z) || ClientWaterCache.height(x, y + 1, z) > 0) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return FULL_HEIGHT;
     }
@@ -295,14 +335,14 @@ public final class WaterRenderer {
         if(y < 0 || y > 255) return 1.0F;
         IBlockState state = world.getBlockState(POS.setPos(x, y, z));
         if(!state.getMaterial().isLiquid()) return 1.0F;
-        if(state.getBlock() == ModRegistry.SETTLED_WATER) return (state.getValue(BlockFluidBase.LEVEL) + 1) / (Water.LEVELS + 1.0F);
+        if(FluidicWater.isWater(state)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return FULL_HEIGHT;
     }
 
     /**
      * Level of the corner at the low x/z edge of (x, z), averaged over the four cells around it exactly like
-     * settled water does (BlockSettledWater.getExtendedState and Forge's getFluidHeightAverage), so both kinds
+     * water blocks do (FluidicWater.cornerHeight, used by vanilla's fluid renderer), so both kinds
      * of water share their corners: solid blocks are left out, open blocks count as dry and near full cells
      * weigh more.
      */
