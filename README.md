@@ -38,19 +38,25 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   simulation, so a resting lake costs nothing. When a neighbour changes, or simulated water arrives at a
   different level, the simulation wakes them back up. Water placed by anything else, like a bucket, starts
   flowing the same way.
-* **Oceans and rivers**. Full water below sea level in ocean, river and beach biomes is an endless
+* **Oceans and rivers**. Full water below sea level that belongs to an ocean or river is an endless
   reservoir: water flowing in disappears, and holes or caves opened beside or below it fill up from it,
-  so the sea never drains.
+  so the sea never drains. A body of water counts when it holds at least 256 blocks below sea level and
+  reaches the open surface at sea level in an ocean, river or beach biome (`Reservoirs`). The whole body
+  counts, also where it runs past the edge of its biome, while pools and flooded caves that do not reach
+  the sea are ordinary water.
 * **Rain**. While it rains, random columns of player-loaded chunks get a drop. This is the same sampling
   vanilla uses to place snow. Thunderstorms drop more. Leaves absorb some of the water dripping through.
 * **Evaporation**. Puddles, shallow pools and partly filled surfaces slowly evaporate, much faster in
   direct sun, and water resting on soil soaks into the ground. Nothing evaporates while it rains or
-  thunders, though soil keeps soaking water up. Lakes and oceans keep their water.
+  thunders or below sea level, though soil keeps soaking water up. Lakes and oceans keep their water.
 * **Client rendering** (`WaterRenderer`). The server sends deflated per-cell heights of changed sections
   to players watching the chunk. The client compiles each section into a display list, with smoothed
   corner heights, and draws it after the world.
 * **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Only full
   blocks can be scooped, so no water is created, and the vanilla infinite water source no longer works.
+* **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,
+  and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
+  sponge touching an ocean or river fills up at once.
 * **Persistence**. Water still moving when the world saves is written to
   `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks. Settled water blocks
   of earlier versions (`fluidic:settled_water`) are converted to water blocks as their chunks load.

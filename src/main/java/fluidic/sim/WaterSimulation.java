@@ -6,10 +6,14 @@ import fluidic.block.FluidicWater;
 import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayer;
@@ -107,6 +111,8 @@ public final class WaterSimulation {
     private final LongArrayList poolCells = new LongArrayList();
     /** Keys of sections a pool surface reached that are no longer simulated, requested after iterating */
     private final LongArrayList poolMissing = new LongArrayList();
+    /** Water soaked up by dry sponges so far, by block position */
+    private final Long2IntOpenHashMap sponges = new Long2IntOpenHashMap();
     /** Block position / mass pairs */
     private final LongArrayList overflowCells = new LongArrayList();
     private StepResult result = new StepResult();
@@ -300,6 +306,18 @@ public final class WaterSimulation {
             setTerrain(pos, Terrain.classify(world, pos, state));
         }
 
+        for(int n = 0; n < step.wetSponges.size(); n++) {
+            BlockPos pos = BlockPos.fromLong(step.wetSponges.getLong(n));
+            if(!world.isBlockLoaded(pos)) continue;
+            IBlockState state = world.getBlockState(pos);
+            if(state.getBlock() == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) {
+                // As vanilla sponges do when they soak up water
+                world.setBlockState(pos, state.withProperty(BlockSponge.WET, true), 2);
+                world.playEvent(2001, pos, Block.getIdFromBlock(Blocks.WATER));
+            }
+            setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
+        }
+
         for(int n = 0; n < step.wakes.size(); n++) {
             BlockPos pos = BlockPos.fromLong(step.wakes.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
@@ -435,6 +453,7 @@ public final class WaterSimulation {
 
         // Phase 2: move the water, cheap and serial since flows cross section borders
         for(WaterSection section : stepList) section.applyFlows();
+        for(WaterSection section : stepList) countSoaks(section);
 
         for(WaterSection section : stepList) {
             for(int n = 0; n < section.wakes.size(); n++) {
@@ -477,8 +496,8 @@ public final class WaterSimulation {
         // Match the rate settled water dries at, a block gets a random tick about every 1365 ticks.
         // Dormant water is shallow water around plants, so it is a surface resting on soil, sky is not checked.
         // Nothing evaporates in rain, the ground still soaks water up.
-        double evaporation = ((raining ? 0.0D : config.evaporationChance * (sunny ? config.sunEvaporationMultiplier : 1.0D)) + config.groundAbsorptionChance)
-                * EVAPORATE_STEPS / 1365.0D;
+        double evaporation = (raining ? 0.0D : config.evaporationChance * (sunny ? config.sunEvaporationMultiplier : 1.0D)) * EVAPORATE_STEPS / 1365.0D;
+        double absorption = config.groundAbsorptionChance * EVAPORATE_STEPS / 1365.0D;
         ObjectIterator<WaterSection> iterator = sections.values().iterator();
         while(iterator.hasNext()) {
             WaterSection section = iterator.next();
@@ -489,7 +508,7 @@ public final class WaterSimulation {
                 section.idleSteps = 0;
                 if(step % EVAPORATE_STEPS == 0) {
                     linkNeighbors(section);
-                    if(section.evaporate(random, evaporation)) section.dirtyNet = true;
+                    if(section.evaporate(random, evaporation, absorption, seaLevel)) section.dirtyNet = true;
                 }
             }
             else if(section.state == WaterSection.STATE_READY && section.filled > 0) {
@@ -569,6 +588,38 @@ public final class WaterSimulation {
         for(int dir = 0; dir < 6; dir++) {
             int ny = section.sy + Water.DY[dir];
             section.neighbors[dir] = ny < 0 || ny > 15 ? WaterSection.OUT_OF_WORLD : sections.get(section.neighborKey(dir));
+        }
+    }
+
+    /**
+     * Counts the water soaked into sponges this step against what each can hold. Water past that goes back to the
+     * cell it came from, and full sponges turn wet.
+     */
+    private void countSoaks(WaterSection section) {
+        int capacity = (int)Math.round(ForgeConfigHandler.server.spongeCapacity * Water.FULL);
+        for(int n = 0; n + 1 < section.soaks.size(); n += 2) {
+            long cell = section.soaks.getLong(n);
+            long source = section.soaks.getLong(n + 1);
+            int i = (int)(source >>> 32), amount = (int)source;
+            WaterSection target = sections.get(cell >>> 12);
+            int ti = (int)(cell & 0xFFF);
+            boolean dry = target != null && target.state == WaterSection.STATE_READY && target.terrain[ti] == WaterSection.SPONGE;
+            long pos = dry ? blockPos(target, ti) : 0L;
+            int held = dry ? sponges.get(pos) : capacity;
+            int taken = Math.min(amount, capacity - held);
+            if(taken < amount) {
+                section.addMass(i, amount - taken);
+                section.dirtyNet = true;
+            }
+            if(!dry || taken <= 0) continue;
+            if(held + taken < capacity) {
+                sponges.put(pos, held + taken);
+                continue;
+            }
+            // Full, nothing more flows in while the server turns it into a wet sponge
+            sponges.remove(pos);
+            target.terrain[ti] = WaterSection.SOLID;
+            result.wetSponges.add(pos);
         }
     }
 
@@ -849,6 +900,7 @@ public final class WaterSimulation {
         byte old = section.terrain[i];
         // A waking block is still settled water in the world until the server thread removes it
         if(old == code || (old == WaterSection.WAKING && code >= WaterSection.SETTLED)) return;
+        if(old == WaterSection.SPONGE) sponges.remove(blockPos(section, i));
         section.terrain[i] = code;
         section.touched = true;
         // Shallow water resting next to the change may have somewhere to go now
@@ -926,10 +978,18 @@ public final class WaterSimulation {
         }
 
         if(reservoir) {
-            // Oceans never wake, they pour into open space beside and below them and keep it filled
+            // Oceans never wake, they pour into open space beside and below them and keep it filled. A sponge touching
+            // one fills up at once.
             for(int dir = 0; dir < 6; dir++) {
-                if(dir == Water.UP || !WaterSection.isOpen(codes[dir])) continue;
                 int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
+                if(codes[dir] == WaterSection.SPONGE) {
+                    BlockPos sponge = new BlockPos(nx, ny, nz);
+                    sponges.remove(sponge.toLong());
+                    doSetTerrain(nx, ny, nz, WaterSection.SOLID);
+                    result.wetSponges.add(sponge.toLong());
+                    continue;
+                }
+                if(dir == Water.UP || !WaterSection.isOpen(codes[dir])) continue;
                 if(massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF) doAddWater(nx, ny, nz, WaterSection.RESERVOIR_FLOW, false);
             }
             return;
@@ -939,7 +999,9 @@ public final class WaterSimulation {
         for(int dir = 0; dir < 6 && !wake; dir++) {
             int code = codes[dir];
             int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
-            if(dir == Water.DOWN) {
+            // A dry sponge on any side soaks the water up
+            if(code == WaterSection.SPONGE) wake = true;
+            else if(dir == Water.DOWN) {
                 // Leaves below take water until they are full of it
                 wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR
                         || (WaterSection.holds(code) && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
@@ -1002,9 +1064,17 @@ public final class WaterSimulation {
             tag.setIntArray("cells", cells);
             list.appendTag(tag);
         }
+        NBTTagList soaked = new NBTTagList();
+        for(Long2IntMap.Entry entry : sponges.long2IntEntrySet()) {
+            NBTTagCompound tag = new NBTTagCompound();
+            tag.setLong("pos", entry.getLongKey());
+            tag.setInteger("water", entry.getIntValue());
+            soaked.appendTag(tag);
+        }
         NBTTagCompound root = new NBTTagCompound();
         root.setInteger("version", 1);
         root.setTag("sections", list);
+        root.setTag("sponges", soaked);
         return root;
     }
 
@@ -1019,6 +1089,11 @@ public final class WaterSimulation {
             for(int c = 0; c + 1 < cells.length; c += 2) {
                 if(cells[c] >= 0 && cells[c] < 4096 && cells[c + 1] > 0) section.addMass(cells[c], cells[c + 1]);
             }
+        }
+        NBTTagList soaked = root.getTagList("sponges", Constants.NBT.TAG_COMPOUND);
+        for(int n = 0; n < soaked.tagCount(); n++) {
+            NBTTagCompound tag = soaked.getCompoundTagAt(n);
+            sponges.put(tag.getLong("pos"), tag.getInteger("water"));
         }
     }
 }

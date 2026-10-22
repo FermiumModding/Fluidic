@@ -91,8 +91,9 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         if(!canEvaporate(world, simulation, pos, state)) return;
         ForgeConfigHandler.ServerConfig config = ForgeConfigHandler.server;
         boolean sun = world.isDaytime() && !world.isRaining() && world.canSeeSky(pos.up());
-        // The chances are per sixteenth of a block, a level is an eighth. Nothing evaporates in rain, soil still soaks it up.
-        double chance = world.isRaining() ? 0.0D : config.evaporationChance * (sun ? config.sunEvaporationMultiplier : 1.0D);
+        // The chances are per sixteenth of a block, a level is an eighth. Nothing evaporates in rain or below sea level,
+        // soil still soaks it up.
+        double chance = world.isRaining() || pos.getY() < world.getSeaLevel() ? 0.0D : config.evaporationChance * (sun ? config.sunEvaporationMultiplier : 1.0D);
         if(isSoil(world.getBlockState(pos.down()))) chance += config.groundAbsorptionChance;
         if(rand.nextDouble() >= chance * 0.5D) return;
 

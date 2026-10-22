@@ -9,6 +9,7 @@
     "vanilla.BlockConcretePowderMixin",
     "vanilla.BlockFarmlandMixin",
     "vanilla.BlockMixin",
+    "vanilla.BlockSpongeMixin",
     "vanilla.EntityBoatMixin",
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",

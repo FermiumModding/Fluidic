@@ -5,14 +5,15 @@ import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockConcretePowder;
+import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
-import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraftforge.common.IPlantable;
@@ -69,6 +70,7 @@ public final class Terrain {
     /** Terrain code of a block state, without the position, so reservoir water counts as plain settled water */
     public static byte classify(IBlockState state) {
         if(FluidicWater.isWater(state)) return (byte)(WaterSection.SETTLED + FluidicWater.level(state));
+        if(state.getBlock() == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) return WaterSection.SPONGE;
         Byte cached = CACHE.get(state);
         if(cached != null) return cached;
         byte code = configured(state);
@@ -217,20 +219,16 @@ public final class Terrain {
             Arrays.fill(terrain, WaterSection.OPEN);
             return terrain;
         }
-        // Full water below sea level is a reservoir in ocean, river and beach biomes, looked up once per column
+        // Full water below sea level may be part of an ocean or river
         boolean belowSea = sy * 16 < world.getSeaLevel();
-        byte[] reservoirColumn = belowSea ? new byte[256] : null;
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for(int y = 0; y < 16; y++) {
             for(int z = 0; z < 16; z++) {
                 for(int x = 0; x < 16; x++) {
                     byte code = classify(storage.get(x, y, z));
-                    if(belowSea && code == WaterSection.SETTLED + Water.LEVELS && sy * 16 + y < world.getSeaLevel()) {
-                        int column = (z << 4) | x;
-                        if(reservoirColumn[column] == 0) {
-                            Biome biome = chunk.getBiome(new BlockPos(sx * 16 + x, 0, sz * 16 + z), world.getBiomeProvider());
-                            reservoirColumn[column] = (byte)(FluidicWater.isReservoirBiome(biome) ? 1 : 2);
-                        }
-                        if(reservoirColumn[column] == 1) code = WaterSection.RESERVOIR;
+                    if(belowSea && code == WaterSection.SETTLED + Water.LEVELS && sy * 16 + y < world.getSeaLevel()
+                            && Reservoirs.isReservoir(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z))) {
+                        code = WaterSection.RESERVOIR;
                     }
                     terrain[Water.cellIndex(x, y, z)] = code;
                 }

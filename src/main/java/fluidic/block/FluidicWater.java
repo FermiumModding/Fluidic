@@ -1,6 +1,7 @@
 package fluidic.block;
 
 import fluidic.handlers.ForgeConfigHandler;
+import fluidic.sim.Reservoirs;
 import fluidic.sim.SimulatedWater;
 import fluidic.sim.Water;
 import net.minecraft.block.BlockLiquid;
@@ -47,11 +48,12 @@ public final class FluidicWater {
     }
 
     /**
-     * Full water below sea level in oceans, rivers and beaches is an endless reservoir: it never drains, refills
-     * what is taken from it and swallows water flowing in, so breaching the sea floor cannot empty the ocean.
+     * Full water below sea level in the body of water of an ocean or river is an endless reservoir: it never drains,
+     * refills what is taken from it and swallows water flowing in, so breaching the sea floor cannot empty the ocean.
+     * The body counts as a whole, past the edge of its biome too, see {@link Reservoirs}.
      */
     public static boolean isReservoir(World world, BlockPos pos, IBlockState state) {
-        return isWater(state) && level(state) == Water.LEVELS && pos.getY() < world.getSeaLevel() && isReservoirBiome(world.getBiome(pos));
+        return !world.isRemote && isWater(state) && level(state) == Water.LEVELS && pos.getY() < world.getSeaLevel() && Reservoirs.isReservoir(world, pos);
     }
 
     public static boolean isReservoirBiome(Biome biome) {

@@ -126,7 +126,7 @@ public class ForgeConfigHandler {
 				"minecraft:emerald_block=smooth"
 		};
 
-		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation. Nothing evaporates while it rains or thunders.")
+		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation. Nothing evaporates while it rains or thunders, or below sea level.")
 		@Config.Name("Evaporation Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
 		public double evaporationChance = 0.1D;
@@ -140,6 +140,11 @@ public class ForgeConfigHandler {
 		@Config.Name("Ground Absorption Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
 		public double groundAbsorptionChance = 0.1D;
+
+		@Config.Comment("Blocks of water a sponge soaks up before it turns into a wet sponge. Sponges soak up water touching them, partly filled blocks and flowing water included, and pools drain into them.")
+		@Config.Name("Sponge Capacity")
+		@Config.RangeDouble(min = 0.125D, max = 1024.0D)
+		public double spongeCapacity = 16.0D;
 	}
 
 	public static class ClientConfig {

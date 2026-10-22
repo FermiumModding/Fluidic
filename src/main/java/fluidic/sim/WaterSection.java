@@ -40,6 +40,10 @@ final class WaterSection {
      * in disappears, and open space next to or below it fills up from it.
      */
     static final byte RESERVOIR = 10;
+    /** A dry sponge, soaks up water flowing into it until it is full, see {@link WaterSimulation} */
+    static final byte SPONGE = 11;
+    /** Water a sponge soaks up per side and step */
+    private static final int SPONGE_RATE = Water.UNIT / 2;
 
     /** Most water a cell takes in from a reservoir per step */
     static final int RESERVOIR_FLOW = Water.FULL / 4;
@@ -109,6 +113,8 @@ final class WaterSection {
     final IntArrayList washes = new IntArrayList();
     /** Reactive blocks, like concrete powder, that water touched this step */
     final LongArrayList touches = new LongArrayList();
+    /** Water soaked into sponges this step, pairs of the sponge cell (packCell) and the source cell << 32 | amount */
+    final LongArrayList soaks = new LongArrayList();
 
     WaterSection(int sx, int sy, int sz) {
         this.sx = sx;
@@ -217,10 +223,13 @@ final class WaterSection {
      * Water left in a dormant section, shallow water around plants and water held in leaves, slowly dries up.
      * Not under more water, leaves inside a pool stay full. Returns whether anything changed.
      */
-    boolean evaporate(java.util.Random rand, double chance) {
+    boolean evaporate(java.util.Random rand, double evaporation, double absorption, int seaLevel) {
         boolean changed = false;
         for(int i = 0; i < 4096; i++) {
-            if(mass[i] > 0 && !underWater(i) && rand.nextDouble() < chance) {
+            if(mass[i] == 0 || underWater(i)) continue;
+            // Nothing evaporates below sea level, the ground still soaks water up
+            double chance = sy * 16 + (i >> 8) < seaLevel ? absorption : evaporation + absorption;
+            if(rand.nextDouble() < chance) {
                 mass[i] = Math.max(0, mass[i] - Water.UNIT);
                 if(mass[i] == 0) filled--;
                 changed = true;
@@ -311,6 +320,7 @@ final class WaterSection {
         wakeSections.clear();
         washes.clear();
         touches.clear();
+        soaks.clear();
         for(int i = 0; i < 4096; i++) {
             int m = mass[i];
             if(m == 0) {
@@ -360,10 +370,17 @@ final class WaterSection {
                 addFlow(i, Water.DOWN, r - Water.FULL, true);
                 r = Water.FULL;
             }
+            else if(r < Water.FULL - Water.SPREAD_DIFF) {
+                // Filled from below too, a wide sheet would only fill slowly from where it touches the ocean's side
+                addSource(i, Math.min(RESERVOIR_FLOW, Water.FULL - r));
+            }
         }
         else if(code == SINK || code == RESERVOIR) {
             addFlow(i, Water.DOWN, r, true);
             return;
+        }
+        else if(code == SPONGE) {
+            r -= soak(i, Water.DOWN, Math.min(r, SPONGE_RATE));
         }
         else if(code >= SETTLED) {
             if(code - SETTLED < Water.LEVELS) wake(ns, ni);
@@ -431,6 +448,10 @@ final class WaterSection {
                     addSource(i, Math.min(RESERVOIR_FLOW, Math.max(1, (Water.FULL - r0) * flowRate / 5000)));
                 }
             }
+            else if(code == SPONGE) {
+                int f = Math.min(Math.min(SPONGE_RATE, Math.max(1, r0 / 4)), r - out);
+                if(f > 0) out += soak(i, dir, f);
+            }
             else if(code >= SETTLED) {
                 int settled = (code - SETTLED) * Water.UNIT;
                 if(Math.abs(r0 - settled) > Water.WAKE_DIFF) wake(ns, ni);
@@ -466,6 +487,9 @@ final class WaterSection {
             addFlow(i, dir, f, false);
             r -= f;
         }
+
+        // A sponge above soaks water up too
+        if(upCode == SPONGE && r > 0) r -= soak(i, Water.UP, Math.min(r, SPONGE_RATE));
 
         // Pressure pushes compressed water up
         if(isOpen(upCode) && r > Water.FULL) {
@@ -537,6 +561,14 @@ final class WaterSection {
         if(flowCount + 2 > flowBuf.length) flowBuf = Arrays.copyOf(flowBuf, flowBuf.length * 2);
         flowBuf[flowCount++] = (i << 5) | (sink ? FLOW_SINK : 0) | dir;
         flowBuf[flowCount++] = amount;
+    }
+
+    /** Water soaking into a sponge, removed here and counted against the sponge by the simulation */
+    private int soak(int i, int dir, int amount) {
+        addFlow(i, dir, amount, true);
+        soaks.add(packCell(neighborSection(i, dir).key, neighborIndex(i, dir)));
+        soaks.add(((long)i << 32) | amount);
+        return amount;
     }
 
     /** Water a cell takes in from a reservoir, which is not simulated and never runs out */
