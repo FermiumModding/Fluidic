@@ -5,6 +5,7 @@ import fluidic.sim.SimulatedWater;
 import net.minecraft.block.material.Material;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityBoat;
+import net.minecraft.init.SoundEvents;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
@@ -48,6 +49,27 @@ public abstract class EntityMixin {
     private boolean fluidic_inSimulatedWater(boolean inWater) {
         AxisAlignedBB box = getEntityBoundingBox().grow(0.0D, -0.4000000059604645D, 0.0D).shrink(0.001D);
         return SimulatedWater.handleEntity((Entity)(Object)this, box) || inWater;
+    }
+
+    /**
+     * Puts out entities touching Fluidic water of any depth. Vanilla's wet check only runs when an entity moves,
+     * the water check runs every tick.
+     */
+    @Inject(method = "handleWaterMovement", at = @At("RETURN"))
+    private void fluidic_extinguishInFluidicWater(CallbackInfoReturnable<Boolean> cir) {
+        Entity entity = (Entity)(Object)this;
+        if(world.isRemote || !entity.isBurning() || !SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) return;
+        entity.playSound(SoundEvents.ENTITY_GENERIC_EXTINGUISH_FIRE, 0.7F, 1.6F + (world.rand.nextFloat() - world.rand.nextFloat()) * 0.4F);
+        entity.extinguish();
+    }
+
+    /**
+     * Fluidic water of any depth gets entities wet. Vanilla then puts out their fire with a hiss, keeps them from
+     * catching fire, and hurts endermen, like it does in shallow vanilla water.
+     */
+    @Inject(method = "isWet", at = @At("RETURN"), cancellable = true)
+    private void fluidic_wetInFluidicWater(CallbackInfoReturnable<Boolean> cir) {
+        if(!cir.getReturnValueZ() && SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) cir.setReturnValue(true);
     }
 
     /** Drowning, air bubbles, the underwater overlay and the underwater checks of mobs */

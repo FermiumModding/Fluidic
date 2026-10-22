@@ -27,8 +27,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   pressure) from the same masses. It runs in parallel across sections on a shared fork/join pool. Phase 2
   moves the water serially, which is cheap, so flows crossing section borders cannot race.
 * **Terrain snapshots** (`Terrain`, `WaterWorldListener`). The simulation never touches the world. The
-  server thread classifies blocks as solid, open, vanilla water (water flowing in merges with it) or
-  settled water. It hands over whole-section snapshots and keeps them current through a world listener.
+  server thread classifies blocks (open, washable like flowers, permeable like ladders, porous leaves, solid
+  with a friction, or vanilla water that water flowing in merges with) from the `Block Classifications`
+  config, falling back to rules by material. It hands over whole-section snapshots and keeps them current
+  through a world listener.
 * **Settling**. A section that stays quiet for `Settle Steps` steps becomes `fluidic:settled_water`
   blocks, which have 16 levels and render with Forge's fluid model. It then leaves the simulation, so a
   resting lake costs nothing. Settled blocks never flow on their own. When a neighbour changes, or simulated water
@@ -57,7 +59,8 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   distances).
 * Entities swim in, are carried by and drown in water that is still moving through mixins loaded by
   FermiumBooter. Without FermiumBooter, only settled water affects entities.
-* Non-replaceable non-full blocks (flowers, torches, fences) block water like solid blocks.
+* Fences, walls, doors and other partial blocks that block movement are solid unless listed as permeable
+  in `Block Classifications`.
 
 ## Building
 

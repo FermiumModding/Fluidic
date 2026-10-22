@@ -7,6 +7,7 @@ import net.minecraftforge.fml.client.event.ConfigChangedEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import fluidic.Fluidic;
+import fluidic.sim.Terrain;
 
 @Config(modid = Fluidic.MODID)
 public class ForgeConfigHandler {
@@ -72,6 +73,59 @@ public class ForgeConfigHandler {
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
 		public double leafAbsorption = 0.5D;
 
+		@Config.Comment({
+				"How water treats blocks, as modid:block=class or modid:block:meta=class. Blocks not listed are classified",
+				"from their material: plants and fixtures like torches are washable, other blocks you can walk through are",
+				"permeable, leaves are porous, and solid blocks are rough, smooth or solid by material.",
+				"Classes:",
+				"  open      - like air, water settles there",
+				"  washable  - water flows through, the block breaks under more than half a block of water (flowers)",
+				"  permeable - water flows through at any depth without breaking the block (ladders, signs)",
+				"  porous    - water drips down through but never settles there (leaves)",
+				"  solid     - blocks water",
+				"  rough     - blocks water, water runs slowly over it (grass, dirt)",
+				"  smooth    - blocks water, water runs quickly over it (stone, glass)",
+				"  reactive  - blocks water, the block is updated when water touches it (concrete powder)",
+				"  sink      - water flowing in disappears (vanilla water)"})
+		@Config.Name("Block Classifications")
+		public String[] blockClassifications = {
+				"minecraft:ladder=permeable",
+				"minecraft:standing_sign=permeable",
+				"minecraft:wall_sign=permeable",
+				"minecraft:reeds=permeable",
+				"minecraft:standing_banner=permeable",
+				"minecraft:wall_banner=permeable",
+				"minecraft:iron_bars=permeable",
+				"minecraft:web=washable",
+				"minecraft:leaves=porous",
+				"minecraft:leaves2=porous",
+				"minecraft:concrete_powder=reactive",
+				"minecraft:grass=rough",
+				"minecraft:dirt=rough",
+				"minecraft:grass_path=rough",
+				"minecraft:farmland=rough",
+				"minecraft:mycelium=rough",
+				"minecraft:sand=rough",
+				"minecraft:gravel=rough",
+				"minecraft:clay=rough",
+				"minecraft:soul_sand=rough",
+				"minecraft:snow=rough",
+				"minecraft:stone=smooth",
+				"minecraft:stonebrick=smooth",
+				"minecraft:quartz_block=smooth",
+				"minecraft:prismarine=smooth",
+				"minecraft:obsidian=smooth",
+				"minecraft:concrete=smooth",
+				"minecraft:glass=smooth",
+				"minecraft:stained_glass=smooth",
+				"minecraft:ice=smooth",
+				"minecraft:packed_ice=smooth",
+				"minecraft:iron_block=smooth",
+				"minecraft:gold_block=smooth",
+				"minecraft:diamond_block=smooth",
+				"minecraft:emerald_block=smooth"
+		};
+
 		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation.")
 		@Config.Name("Evaporation Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
@@ -111,6 +165,8 @@ public class ForgeConfigHandler {
 		public static void onConfigChanged(ConfigChangedEvent.OnConfigChangedEvent event) {
 			if(event.getModID().equals(Fluidic.MODID)) {
 				ConfigManager.sync(Fluidic.MODID, Config.Type.INSTANCE);
+				// Classifications are cached, running simulations pick up the change with their terrain refreshes
+				Terrain.reload();
 			}
 		}
 	}

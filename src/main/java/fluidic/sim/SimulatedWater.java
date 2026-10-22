@@ -1,5 +1,6 @@
 package fluidic.sim;
 
+import fluidic.handlers.ModRegistry;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.EnumFacing;
@@ -54,6 +55,31 @@ public final class SimulatedWater {
     /** Surface of the water in a block, relative to its bottom, 1 when water continues above */
     private static float surface(World world, int x, int y, int z, int height) {
         return height(world, x, y + 1, z) > 0 ? 1.0F : height / 255.0F;
+    }
+
+    /**
+     * Whether a bounding box touches Fluidic water of any depth, settled or simulated. Shallow water is too
+     * little to swim in but still gets entities wet, which puts out fire like vanilla's shallow water does.
+     */
+    public static boolean isTouchingWater(World world, AxisAlignedBB box) {
+        int minX = MathHelper.floor(box.minX), maxX = MathHelper.ceil(box.maxX);
+        int minY = MathHelper.floor(box.minY), maxY = MathHelper.ceil(box.maxY);
+        int minZ = MathHelper.floor(box.minZ), maxZ = MathHelper.ceil(box.maxZ);
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for(int x = minX; x < maxX; x++) {
+            for(int y = minY; y < maxY; y++) {
+                for(int z = minZ; z < maxZ; z++) {
+                    double surface;
+                    int height = height(world, x, y, z);
+                    IBlockState state = world.getBlockState(pos.setPos(x, y, z));
+                    if(state.getBlock() == ModRegistry.SETTLED_WATER) surface = ModRegistry.SETTLED_WATER.getFilledPercentage(world, pos);
+                    else if(height > 0) surface = surface(world, x, y, z, height);
+                    else continue;
+                    if(box.minY < y + surface) return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Whether there is any simulated water in a box of blocks, corners inclusive */
