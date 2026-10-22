@@ -79,6 +79,8 @@ public final class WaterSimulation {
     // ---------------------------------------------------------------- server thread state
 
     private final WorldServer world;
+    /** Oceans fill up to here, read once since worlds never change it */
+    private final int seaLevel;
     private final int dimension;
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<Consumer<WaterSimulation>> commands = new ConcurrentLinkedQueue<>();
@@ -126,6 +128,7 @@ public final class WaterSimulation {
 
     WaterSimulation(WorldServer world) {
         this.world = world;
+        this.seaLevel = world.getSeaLevel();
         this.dimension = world.provider.getDimension();
         this.executor = Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r, "Fluidic Simulation DIM" + dimension);
@@ -424,10 +427,10 @@ public final class WaterSimulation {
 
         // Phase 1: every section computes its outflows from the same masses, in parallel
         if(stepList.size() >= PARALLEL_THRESHOLD) {
-            SimManager.pool().submit(() -> stepList.parallelStream().forEach(section -> section.computeFlows(step, leafAbsorption))).join();
+            SimManager.pool().submit(() -> stepList.parallelStream().forEach(section -> section.computeFlows(step, leafAbsorption, seaLevel))).join();
         }
         else {
-            for(WaterSection section : stepList) section.computeFlows(step, leafAbsorption);
+            for(WaterSection section : stepList) section.computeFlows(step, leafAbsorption, seaLevel);
         }
 
         // Phase 2: move the water, cheap and serial since flows cross section borders

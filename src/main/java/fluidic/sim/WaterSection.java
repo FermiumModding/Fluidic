@@ -78,6 +78,8 @@ final class WaterSection {
     int filled;
     /** Cells that emptied and still need to check their settled neighbours */
     private int drained;
+    /** Sea level of the world, for the step being computed */
+    private int seaLevel;
     int quietSteps;
     /** Times settling waited for neighbouring sections a pool surface reaches */
     int levelWaits;
@@ -300,7 +302,8 @@ final class WaterSection {
      * Computes this step's outflows of every wet cell from the current masses. Only reads other sections and
      * only writes this section's scratch state, so sections can be computed in parallel.
      */
-    void computeFlows(int step, double leafAbsorption) {
+    void computeFlows(int step, double leafAbsorption, int seaLevel) {
+        this.seaLevel = seaLevel;
         flowCount = 0;
         pending = false;
         wakes.clear();
@@ -347,6 +350,15 @@ final class WaterSection {
                 f = Math.min(f, r);
                 addFlow(i, Water.DOWN, f, false);
                 r -= f;
+            }
+        }
+        else if(code == RESERVOIR && sy * 16 + (i >> 8) < seaLevel) {
+            // Below sea level this is part of the ocean, like a hole scooped out with a bucket: the ocean around it
+            // fills it up and it settles into ocean again. Draining it into the ocean below would empty it as fast as
+            // it refills. Water poured onto the ocean above sea level still vanishes into it.
+            if(r > Water.FULL) {
+                addFlow(i, Water.DOWN, r - Water.FULL, true);
+                r = Water.FULL;
             }
         }
         else if(code == SINK || code == RESERVOIR) {
