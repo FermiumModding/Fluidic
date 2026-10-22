@@ -1,0 +1,22 @@
+{
+  "required": true,
+  "package": "fluidic.mixin",
+  "refmap": "mixins.fluidic.refmap.json",
+  "compatibilityLevel": "JAVA_8",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "mixins": [
+    "vanilla.BlockConcretePowderMixin",
+    "vanilla.BlockFarmlandMixin",
+    "vanilla.BlockLilyPadMixin",
+    "vanilla.BlockMixin",
+    "vanilla.EntityBoatMixin",
+    "vanilla.EntityItemMixin",
+    "vanilla.EntityMixin",
+    "vanilla.EntityXPOrbMixin",
+    "vanilla.ItemLilyPadMixin"
+  ],
+  "injectors": {
+    "maxShiftBy": 10
+  }
+}

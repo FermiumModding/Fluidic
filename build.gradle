@@ -31,6 +31,7 @@ minecraft {
         }
 
         server {
+            args "nogui"
 
 //            jvmArg "-Dfml.coreMods.load=${coremod_class}" //only use if you need a coremod
 //            jvmArg "-Dmixin.hotSwap=true"
@@ -60,7 +61,6 @@ dependencies {
 
     implementation fg.deobf("curse.maven:fermiumbooter-${fermiumbooter_version}")
 	
-    implementation fg.deobf("curse.maven:jei-${jei_version}")
 }
 
 mixin {
