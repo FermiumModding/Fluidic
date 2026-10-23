@@ -171,6 +171,12 @@ public final class WaterSimulation {
         enqueue(sim -> sim.doAddWater(x, y, z, amount, true, true));
     }
 
+    /** Takes simulated water around a cell at its height, like a bucket scooping it up, from the fullest cells first */
+    public void takeWater(BlockPos pos, int amount, int reach) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        enqueue(sim -> sim.doTakeWater(x, y, z, amount, reach));
+    }
+
     public void setTerrain(BlockPos pos, byte code) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         enqueue(sim -> sim.doSetTerrain(x, y, z, code));
@@ -955,6 +961,33 @@ public final class WaterSimulation {
         }
     }
 
+    private void doTakeWater(int x, int y, int z, int amount, int reach) {
+        List<long[]> cells = new ArrayList<>();
+        for(int dx = -reach; dx <= reach; dx++) {
+            for(int dz = -reach; dz <= reach; dz++) {
+                WaterSection section = readySection(x + dx, y, z + dz);
+                if(section == null) continue;
+                int i = Water.cellIndex((x + dx) & 15, y & 15, (z + dz) & 15);
+                if(section.mass[i] > 0 && WaterSection.isOpen(section.terrain[i])) cells.add(new long[] {section.key, i});
+            }
+        }
+        while(amount > 0 && !cells.isEmpty()) {
+            long[] fullest = cells.get(0);
+            for(long[] cell : cells) {
+                if(sections.get(cell[0]).mass[(int)cell[1]] > sections.get(fullest[0]).mass[(int)fullest[1]]) fullest = cell;
+            }
+            WaterSection section = sections.get(fullest[0]);
+            int i = (int)fullest[1];
+            int taken = Math.min(amount, Math.min(section.mass[i], Water.UNIT));
+            section.removeMass(i, taken);
+            section.wakeUp();
+            section.touched = true;
+            section.dirtyNet = true;
+            amount -= taken;
+            if(section.mass[i] == 0) cells.remove(fullest);
+        }
+    }
+
     private void doSetTerrain(int x, int y, int z, byte code) {
         WaterSection section = readySection(x, y, z);
         if(section != null) applyTerrain(section, Water.cellIndex(x & 15, y & 15, z & 15), code);
@@ -972,6 +1005,12 @@ public final class WaterSimulation {
         if(old == code || (old == WaterSection.WAKING && code >= WaterSection.SETTLED)) return;
         if(old == WaterSection.SPONGE) sponges.remove(blockPos(section, i));
         section.terrain[i] = code;
+        // A block water can flow into took the place of a solid one. Settled water on it or beside it may have been
+        // placed after the step that would have woken it was worked out, it would hang in the air.
+        if(WaterSection.holds(code) && !WaterSection.holds(old) && old < WaterSection.SETTLED && old != WaterSection.WAKING
+                && old != WaterSection.RESERVOIR) {
+            wakeSettledAround(section, i);
+        }
         section.touched = true;
         // Shallow water resting next to the change may have somewhere to go now
         section.wakeUp();
@@ -987,6 +1026,19 @@ public final class WaterSimulation {
             section.removeMass(i, mass);
             section.dirtyNet = true;
             doAddWater(section.sx * 16 + (i & 15), section.sy * 16 + (i >> 8) + 1, section.sz * 16 + ((i >> 4) & 15), mass, false);
+        }
+    }
+
+    private void wakeSettledAround(WaterSection section, int i) {
+        for(int dir = Water.UP; dir <= Water.EAST; dir++) {
+            WaterSection ns = WaterSection.crosses(i, dir) ? sections.get(section.neighborKey(dir)) : section;
+            if(ns == null || ns.state != WaterSection.STATE_READY) continue;
+            int ni = WaterSection.neighborIndex(i, dir);
+            int code = ns.terrain[ni];
+            if(code >= WaterSection.SETTLED && (dir == Water.UP || code - WaterSection.SETTLED >= 2)) {
+                ns.terrain[ni] = WaterSection.WAKING;
+                result.wakes.add(blockPos(ns, ni));
+            }
         }
     }
 

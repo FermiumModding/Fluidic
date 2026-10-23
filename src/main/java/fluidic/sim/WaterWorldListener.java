@@ -1,5 +1,7 @@
 package fluidic.sim;
 
+import fluidic.block.FluidicWater;
+import fluidic.block.LilyPads;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
@@ -26,6 +28,7 @@ final class WaterWorldListener implements IWorldEventListener {
     public void notifyBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
         if(oldState == newState) return;
         Reservoirs.blockChanged(world, pos, oldState, newState);
+        if(FluidicWater.isWater(oldState) || FluidicWater.isWater(newState)) LilyPads.waterChanged(world, pos);
         byte code = Terrain.classify(world, pos, newState);
         if(code != Terrain.classify(world, pos, oldState)) simulation.setTerrain(pos, code);
     }

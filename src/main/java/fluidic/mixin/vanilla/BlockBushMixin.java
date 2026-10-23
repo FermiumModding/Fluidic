@@ -11,13 +11,14 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** A lily pad that lost its water moves with it instead of breaking, see {@link LilyPads#follow} */
+/** A lily pad that lost its water moves with it instead of breaking, see {@link LilyPads#follow} and {@link LilyPads#watch} */
 @Mixin(BlockBush.class)
 public abstract class BlockBushMixin {
 
     @Inject(method = "checkAndDropBlock", at = @At("HEAD"), cancellable = true)
     private void fluidic_lilyPadFollowsWater(World world, BlockPos pos, IBlockState state, CallbackInfo ci) {
         if(!((Object)this instanceof BlockLilyPad) || world.isRemote) return;
-        if(!((BlockBush)(Object)this).canBlockStay(world, pos, state) && LilyPads.follow(world, pos, state)) ci.cancel();
+        if(((BlockBush)(Object)this).canBlockStay(world, pos, state)) LilyPads.watch(world, pos);
+        else if(LilyPads.follow(world, pos, state)) ci.cancel();
     }
 }

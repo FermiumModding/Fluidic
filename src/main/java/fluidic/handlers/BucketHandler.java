@@ -3,6 +3,7 @@ package fluidic.handlers;
 import fluidic.Fluidic;
 import fluidic.block.FluidicWater;
 import fluidic.sim.SimManager;
+import fluidic.sim.SimulatedWater;
 import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
@@ -44,9 +45,14 @@ public class BucketHandler {
         EntityPlayer player = event.getEntityPlayer();
         BlockPos pos = target.getBlockPos();
         IBlockState state = world.getBlockState(pos);
-        // Full blocks are scooped up by vanilla
-        if(!FluidicWater.isWater(state) || FluidicWater.level(state) >= Water.LEVELS) return;
         if(!world.isBlockModifiable(player, pos) || !player.canPlayerEdit(pos.offset(target.sideHit), target.sideHit, event.getEmptyBucket())) return;
+        if(!FluidicWater.isWater(state)) {
+            // Water still flowing is no block to aim at, the bucket went through it to the block behind
+            scoopSimulated(event, world, player, pos.offset(target.sideHit));
+            return;
+        }
+        // Full blocks are scooped up by vanilla
+        if(FluidicWater.level(state) >= Water.LEVELS) return;
 
         List<BlockPos> surface = surfaceAround(world, pos);
         int[] levels = new int[surface.size()];
@@ -75,6 +81,28 @@ public class BucketHandler {
                 FluidicWater.placing = false;
                 if(simulation != null) simulation.setTerrain(cell, Terrain.classify(world, cell, lowered));
             }
+        }
+        player.playSound(SoundEvents.ITEM_BUCKET_FILL, 1.0F, 1.0F);
+        event.setFilledBucket(new ItemStack(Items.WATER_BUCKET));
+        event.setResult(Event.Result.ALLOW);
+    }
+
+    /**
+     * Scoops up simulated water around the block the bucket went through, when there is a block of it at that height
+     * nearby. The server takes it from the simulation, the fullest cells first. The amount is judged from the heights
+     * last sent to players, which is what both sides know.
+     */
+    private static void scoopSimulated(FillBucketEvent event, World world, EntityPlayer player, BlockPos pos) {
+        if(SimulatedWater.height(world, pos.getX(), pos.getY(), pos.getZ()) == 0) return;
+        int total = 0;
+        for(int dx = -REACH; dx <= REACH; dx++) {
+            for(int dz = -REACH; dz <= REACH; dz++) total += SimulatedWater.height(world, pos.getX() + dx, pos.getY(), pos.getZ() + dz);
+        }
+        if(total < 255) return;
+        if(!world.isRemote) {
+            WaterSimulation simulation = SimManager.get(world);
+            if(simulation == null) return;
+            simulation.takeWater(pos, Water.FULL, REACH);
         }
         player.playSound(SoundEvents.ITEM_BUCKET_FILL, 1.0F, 1.0F);
         event.setFilledBucket(new ItemStack(Items.WATER_BUCKET));

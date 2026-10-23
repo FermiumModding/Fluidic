@@ -5,6 +5,7 @@ import fluidic.sim.Water;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
 
 /**
@@ -15,6 +16,8 @@ public final class LilyPads {
 
     /** Blocks a lily pad sinks with water that went down */
     private static final int MAX_SINK = 4;
+    /** Ticks between checks of a lily pad on flowing water */
+    private static final int CHECK_TICKS = 20;
 
     private LilyPads() {}
 
@@ -51,8 +54,40 @@ public final class LilyPads {
         return true;
     }
 
+    /**
+     * How far below its block a lily pad sits, on the water's surface: water blocks and simulated water are drawn
+     * below the top of their block. 0 when the water under it reaches the top.
+     */
+    public static double sink(IBlockAccess world, BlockPos pos) {
+        BlockPos below = pos.down();
+        float surface = FluidicWater.renderHeight(world, below);
+        // The server knows simulated water from the simulation, the render helper only from what clients were sent
+        if(world instanceof World && !world.getBlockState(below).getMaterial().isLiquid()) {
+            int height = SimulatedWater.height((World)world, below.getX(), below.getY(), below.getZ());
+            if(height > 0) surface = height / 255.0F * Water.RENDER_HEIGHT;
+        }
+        if(surface <= 0.0F || surface >= 1.0F) return 0.0D;
+        // Just above the water, which is drawn a little below its height to keep from flickering
+        return surface - 1.0D + 0.002D;
+    }
+
     private static void move(World world, BlockPos from, BlockPos to, IBlockState pad) {
         world.setBlockState(from, Blocks.AIR.getDefaultState(), 2);
         world.setBlockState(to, pad, 3);
+        watch(world, to);
+    }
+
+    /**
+     * Keeps a lily pad on water that is still flowing checking on it. That water is no block, nothing tells the pad when
+     * it goes down, so it looks again a second later, until it rests on a water block.
+     */
+    public static void watch(World world, BlockPos pos) {
+        if(!FluidicWater.isWater(world.getBlockState(pos.down()))) world.scheduleUpdate(pos, Blocks.WATERLILY, CHECK_TICKS);
+    }
+
+    /** A water block under a lily pad changed, it looks whether it has to move */
+    public static void waterChanged(World world, BlockPos water) {
+        BlockPos up = water.up();
+        if(world.getBlockState(up).getBlock() == Blocks.WATERLILY) world.scheduleUpdate(up, Blocks.WATERLILY, 1);
     }
 }
