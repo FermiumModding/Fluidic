@@ -20,6 +20,7 @@
     "vanilla.BlockRendererDispatcherMixin",
     "vanilla.BlockRenderLayerMixin",
     "vanilla.ChunkCacheMixin",
+    "vanilla.EntityRendererAccessor",
     "vanilla.RenderChunkMixin"
   ],
   "injectors": {

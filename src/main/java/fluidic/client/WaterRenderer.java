@@ -3,6 +3,7 @@ package fluidic.client;
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
+import fluidic.mixin.vanilla.EntityRendererAccessor;
 import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -148,6 +149,9 @@ public final class WaterRenderer {
         frustum.setPosition(camX, camY, camZ);
 
         GlStateManager.pushMatrix();
+        // Vanilla turns fog off before this event, without it distant water would not fade out like the chunks around it.
+        // OptiFine patches the same method, so its fog settings apply too
+        ((EntityRendererAccessor)mc.entityRenderer).fluidic_setupFog(0, partialTicks);
         mc.entityRenderer.enableLightmap();
         RenderHelper.disableStandardItemLighting();
         mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
@@ -180,6 +184,7 @@ public final class WaterRenderer {
         GlStateManager.depthMask(true);
         GlStateManager.disableBlend();
         mc.entityRenderer.disableLightmap();
+        GlStateManager.disableFog();
         GlStateManager.popMatrix();
     }
 
