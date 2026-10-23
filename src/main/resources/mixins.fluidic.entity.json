@@ -15,7 +15,8 @@
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",
     "vanilla.EntityXPOrbMixin",
-    "vanilla.WalkNodeProcessorMixin"
+    "vanilla.WalkNodeProcessorMixin",
+    "vanilla.WorldEntitySpawnerMixin"
   ],
   "injectors": {
     "maxShiftBy": 10
