@@ -89,6 +89,13 @@ public final class Terrain {
         return WaterSection.isOpen(classify(state));
     }
 
+    /** Whether simulated water can be inside the block alongside it, like flowers, ladders, stairs and leaves */
+    public static boolean holdsWater(IBlockState state) {
+        byte code = classify(state);
+        return code == WaterSection.WASHABLE || code == WaterSection.PERMEABLE || code == WaterSection.WATERLOGGABLE
+                || code == WaterSection.POROUS;
+    }
+
     /** Whether rain falls through the block to what lies below, waterloggable blocks like slabs keep it out */
     public static boolean letsRainThrough(IBlockState state) {
         byte code = classify(state);

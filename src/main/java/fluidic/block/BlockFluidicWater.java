@@ -242,6 +242,15 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         return FluidicWater.isPuddle(world, pos, world.getBlockState(pos)) ? false : null;
     }
 
+    /**
+     * Rays that look for liquids, like an empty bucket's, hit water of any level. Vanilla only lets them hit full
+     * water, partly filled vanilla water is flowing water, but Fluidic water is still at every level.
+     */
+    @Override
+    public boolean canCollideCheck(@Nonnull IBlockState state, boolean hitIfLiquid) {
+        return hitIfLiquid;
+    }
+
     /** Half a block or less blocks little light, so grass under a puddle keeps growing */
     @Override
     @SuppressWarnings("deprecation")

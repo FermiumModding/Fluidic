@@ -13,10 +13,13 @@
     "vanilla.EntityBoatMixin",
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",
+    "vanilla.ItemBucketMixin",
     "vanilla.EntityXPOrbMixin"
   ],
   "client": [
     "vanilla.BlockFluidRendererMixin",
+    "vanilla.BlockRendererDispatcherMixin",
+    "vanilla.BlockRenderLayerMixin",
     "vanilla.ChunkCacheMixin",
     "vanilla.RenderChunkMixin"
   ],

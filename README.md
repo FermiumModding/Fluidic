@@ -57,8 +57,11 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   OptiFine shader pack is in use (`Draw Simulated Water In Chunks` in the client config) simulated water is
   drawn by the chunks instead: while a chunk redraws, empty blocks holding simulated water read as water
   blocks of the same level (`ChunkWater`). Water moving then makes its chunks redraw, which costs more.
-* **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Only full
-  blocks can be scooped, so no water is created, and the vanilla infinite water source no longer works.
+* **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Aimed at
+  partly filled water, a bucket gathers a block of water from the surface around it (`BucketHandler`), an
+  eighth at a time from the highest blocks, and only fills when there is a whole block to take, so no water
+  is created and the vanilla infinite water source no longer works. Poured into water, a bucket adds a block
+  of water on top of it.
 * **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,
   and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
   sponge touching an ocean or river fills up at once.
