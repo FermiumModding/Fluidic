@@ -26,6 +26,9 @@ public final class FluidicWater {
     /** Set while the simulation places water itself, so the placement is not reported back to it */
     public static boolean placing;
 
+    /** Set by the client while chunks draw simulated water as water blocks, see fluidic.client.ChunkWater */
+    public static volatile boolean simulatedInChunks;
+
     /** Corner heights are worked out per corner, this is the block whose corners are being drawn */
     private static final ThreadLocal<BlockPos> RENDERING = new ThreadLocal<>();
     /** How far inside the block edge vanilla draws the side faces of liquids */
@@ -115,6 +118,12 @@ public final class FluidicWater {
             return state.getMaterial().isSolid() ? -1.0F : 0.0F;
         }
         if(waterAbove) return 1.0F;
+        // Simulated water drawn by the chunks stands in as a water block, but is drawn at its own height between levels,
+        // so it rises and falls smoothly. Its chunk redraws whenever it changes.
+        if(simulatedInChunks) {
+            int sim = simHeight(pos);
+            if(sim > 0) return sim / 255.0F * Water.RENDER_HEIGHT;
+        }
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return Water.RENDER_HEIGHT;
     }

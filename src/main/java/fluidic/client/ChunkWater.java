@@ -51,6 +51,7 @@ public final class ChunkWater {
         wanted &= ForgeConfigHandler.client.renderWater && !bypassed;
         if(wanted == active) return;
         active = wanted;
+        FluidicWater.simulatedInChunks = wanted;
         WaterRenderer.redrawAll();
         Minecraft mc = Minecraft.getMinecraft();
         if(mc.renderGlobal != null && mc.world != null) mc.renderGlobal.loadRenderers();
