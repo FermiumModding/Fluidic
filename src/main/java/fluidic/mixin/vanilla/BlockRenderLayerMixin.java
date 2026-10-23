@@ -1,6 +1,8 @@
 package fluidic.mixin.vanilla;
 
+import fluidic.block.FluidicWater;
 import fluidic.client.ChunkWater;
+import fluidic.sim.Terrain;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.BlockRenderLayer;
@@ -18,7 +20,9 @@ public abstract class BlockRenderLayerMixin {
 
     @Inject(method = "canRenderInLayer", at = @At("RETURN"), cancellable = true, remap = false)
     private void fluidic_waterInsideLayer(IBlockState state, BlockRenderLayer layer, CallbackInfoReturnable<Boolean> cir) {
-        if(cir.getReturnValueZ() || layer != BlockRenderLayer.TRANSLUCENT || !ChunkWater.isActive()) return;
-        if(ChunkWater.wantsWaterLayer(state)) cir.setReturnValue(true);
+        if(cir.getReturnValueZ() || layer != BlockRenderLayer.TRANSLUCENT) return;
+        // Thin blocks like glass panes draw the water beside them reaching into them, see ThinBlockWater
+        if(!FluidicWater.clientVanilla && Terrain.isThin(state)) cir.setReturnValue(true);
+        else if(ChunkWater.isActive() && ChunkWater.wantsWaterLayer(state)) cir.setReturnValue(true);
     }
 }

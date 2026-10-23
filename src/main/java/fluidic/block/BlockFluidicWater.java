@@ -348,6 +348,11 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         boolean simulated = FluidicWater.simHeight(offset) > 0;
         // Simulated water is drawn by the client renderer, its top and bottom meet this water without a face
         if(simulated && side.getAxis() == EnumFacing.Axis.Y) return false;
+        // Water reaches into a thin block beside it like a glass pane, drawn by the block up to the glass
+        if(side.getAxis() != EnumFacing.Axis.Y) {
+            IBlockState beside = world.getBlockState(offset);
+            if(FluidicWater.isThin(world, beside)) return false;
+        }
         // Full water under an opaque block reaches up to it, its top would only flicker against the block's bottom
         if(side == EnumFacing.UP && FluidicWater.underCeiling(world, pos) && FluidicWater.renderHeight(world, pos) >= 1.0F) return false;
         // Water surfaces meet at shared corners, so no face is drawn between them, except where this water continues

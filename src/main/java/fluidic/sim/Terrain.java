@@ -37,6 +37,9 @@ public final class Terrain {
     /** Facings in simulation direction order */
     private static final EnumFacing[] FACINGS = {EnumFacing.DOWN, EnumFacing.UP, EnumFacing.NORTH, EnumFacing.SOUTH, EnumFacing.WEST, EnumFacing.EAST};
 
+    /** Config class of blocks like glass panes: solid to the simulation, water beside them is drawn up to them */
+    private static final byte THIN = 14;
+
     /** Class names usable in the config */
     private static final Map<String, Byte> CLASSES = new HashMap<>();
     static {
@@ -50,6 +53,7 @@ public final class Terrain {
         CLASSES.put("smooth", WaterSection.SOLID_SMOOTH);
         CLASSES.put("reactive", WaterSection.SOLID_REACTIVE);
         CLASSES.put("sink", WaterSection.SINK);
+        CLASSES.put("thin", THIN);
     }
 
     /** Index in a rule array for entries without metadata */
@@ -84,6 +88,7 @@ public final class Terrain {
         if(known >= 0) return (byte)known;
         byte code = configured(state);
         if(code == UNSET) code = fallback(state);
+        if(code == THIN) code = WaterSection.SOLID_SMOOTH;
         table.put(state, code);
         return code;
     }
@@ -207,6 +212,11 @@ public final class Terrain {
 
     public static boolean isPorous(IBlockState state) {
         return classify(state) == WaterSection.POROUS;
+    }
+
+    /** A block like a glass pane, listed as thin: it blocks water, and water beside it is drawn reaching up to it */
+    public static boolean isThin(IBlockState state) {
+        return configured(state) == THIN;
     }
 
     public static boolean isSink(IBlockState state) {

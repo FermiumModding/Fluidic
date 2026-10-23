@@ -309,10 +309,37 @@ public final class WaterRenderer {
             added = true;
         }
 
-        added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, s00, s10, floor, column, sky, block);
-        added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, s11, s01, floor, column, sky, block);
-        added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, s01, s00, floor, column, sky, block);
-        added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, s10, s11, floor, column, sky, block);
+        if(!isThin(world, x, y, z - 1)) added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, s00, s10, floor, column, sky, block);
+        if(!isThin(world, x, y, z + 1)) added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, s11, s01, floor, column, sky, block);
+        if(!isThin(world, x - 1, y, z)) added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, s01, s00, floor, column, sky, block);
+        if(!isThin(world, x + 1, y, z)) added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, s10, s11, floor, column, sky, block);
+        added |= thinBlocks(world, x, y, z, lx, ly, lz, sky, block);
+        return added;
+    }
+
+    /** Whether a block beside is a thin block like a glass pane, the water reaching into it is drawn by {@link #thinBlocks} */
+    private static boolean isThin(WorldClient world, int x, int y, int z) {
+        return FluidicWater.isThin(world, world.getBlockState(POS.setPos(x, y, z)));
+    }
+
+    /**
+     * Draws the simulated water reaching into thin blocks around a cell, like glass panes, the ones this cell draws for,
+     * see ThinBlockWater.drawsFor. The water inside a corner of panes only touches its cell diagonally.
+     */
+    private static boolean thinBlocks(WorldClient world, int x, int y, int z, int lx, int ly, int lz, int sky, int block) {
+        boolean added = false;
+        BlockPos water = new BlockPos(x, y, z);
+        for(int dx = -1; dx <= 1; dx++) {
+            for(int dz = -1; dz <= 1; dz++) {
+                if(dx == 0 && dz == 0) continue;
+                BlockPos pos = water.add(dx, 0, dz);
+                IBlockState state = world.getBlockState(pos);
+                if(!FluidicWater.isThin(world, state) || !ThinBlockWater.drawsFor(pos, water)) continue;
+                added |= ThinBlockWater.draw(world, pos, state, true, (vx, vy, vz, u, v, shade) -> BUFFER.pos(vx, vy, vz)
+                        .color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex(),
+                        still, lx + dx, ly, lz + dz);
+            }
+        }
         return added;
     }
 

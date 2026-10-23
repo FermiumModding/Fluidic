@@ -115,6 +115,7 @@ public class ForgeConfigHandler {
 				"  solid     - blocks water",
 				"  rough     - blocks water, water runs slowly over it (grass, dirt)",
 				"  smooth    - blocks water, water runs quickly over it (stone, glass)",
+				"  thin      - blocks water, water beside it is drawn reaching up to the block instead of stopping at its edge (glass panes, walls)",
 				"  reactive  - blocks water, the block is updated when water touches it (concrete powder, lava)",
 				"  sink      - water flowing in disappears (water of other mods)"})
 		@Config.Name("Block Classifications")
@@ -126,8 +127,8 @@ public class ForgeConfigHandler {
 				"minecraft:standing_banner=permeable",
 				"minecraft:wall_banner=permeable",
 				"minecraft:iron_bars=permeable",
-				"minecraft:glass_pane=permeable",
-				"minecraft:stained_glass_pane=permeable",
+				"minecraft:glass_pane=thin",
+				"minecraft:stained_glass_pane=thin",
 				"minecraft:fence=permeable",
 				"minecraft:spruce_fence=permeable",
 				"minecraft:birch_fence=permeable",
@@ -135,7 +136,7 @@ public class ForgeConfigHandler {
 				"minecraft:dark_oak_fence=permeable",
 				"minecraft:acacia_fence=permeable",
 				"minecraft:nether_brick_fence=permeable",
-				"minecraft:cobblestone_wall=permeable",
+				"minecraft:cobblestone_wall=thin",
 				"minecraft:rail=permeable",
 				"minecraft:golden_rail=permeable",
 				"minecraft:detector_rail=permeable",

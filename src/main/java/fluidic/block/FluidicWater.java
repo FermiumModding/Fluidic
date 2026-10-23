@@ -4,6 +4,7 @@ import fluidic.compat.FluidloggedCompat;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.sim.Reservoirs;
 import fluidic.sim.SimulatedWater;
+import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.material.Material;
@@ -188,6 +189,19 @@ public final class FluidicWater {
         BlockPos rendering = RENDERING.get();
         if(rendering != null && renderHeight(world, rendering) >= 1.0F) return 1.0F;
         return surfaceCorner(world, corner);
+    }
+
+    /** Whether water beside a block is drawn reaching into it up to the block, like a glass pane, see Terrain.isThin */
+    public static boolean isThin(IBlockAccess world, IBlockState state) {
+        return isFinite(world) && Terrain.isThin(state);
+    }
+
+    /**
+     * Height of water at one of its corners, for drawing past the side of its block: full when it continues up. Same as
+     * the block's own top, without depending on which block is being drawn.
+     */
+    public static float edgeHeight(IBlockAccess world, BlockPos water, BlockPos corner) {
+        return renderHeight(world, water) >= 1.0F ? 1.0F : surfaceCorner(world, corner);
     }
 
     /** Height of the still surface at a corner, as water that does not continue up draws it */
