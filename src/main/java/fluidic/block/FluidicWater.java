@@ -1,5 +1,6 @@
 package fluidic.block;
 
+import fluidic.compat.FluidloggedCompat;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.sim.Reservoirs;
 import fluidic.sim.SimulatedWater;
@@ -75,8 +76,13 @@ public final class FluidicWater {
         return state.getBlock() == Blocks.WATER || state.getBlock() == Blocks.FLOWING_WATER;
     }
 
-    /** Eighths of a block of water in a water block, 1 to 8 */
+    /**
+     * Eighths of a block of water in a water block, 1 to 8. Anything else counts as full: Fluidlogged API hands water's
+     * methods the block it keeps water inside, like stairs, and turns this lookup into one of its own fluid states,
+     * which fails for a block that is no fluid.
+     */
     public static int level(IBlockState state) {
+        if(!isWater(state)) return Water.LEVELS;
         int meta = state.getValue(BlockLiquid.LEVEL);
         return meta >= 8 ? Water.LEVELS : Water.LEVELS - meta;
     }
@@ -108,7 +114,8 @@ public final class FluidicWater {
      * level on top of deeper water is just the surface of a pool and counts as water.
      */
     public static boolean isPuddle(IBlockAccess world, BlockPos pos, IBlockState state) {
-        if(level(state) > Water.LEVELS / 2) return false;
+        // Water kept inside another block, like stairs, is no puddle
+        if(!isWater(state) || level(state) > Water.LEVELS / 2) return false;
         if(world.getBlockState(pos.down()).getMaterial().isLiquid()) return false;
         return !(world instanceof World) || SimulatedWater.height((World)world, pos.getX(), pos.getY() - 1, pos.getZ()) == 0;
     }
@@ -145,6 +152,9 @@ public final class FluidicWater {
         if(!state.getMaterial().isLiquid()) {
             int sim = simHeight(pos);
             if(sim > 0) return waterAbove || sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
+            // Water Fluidlogged API keeps inside the block, like stairs, meets the water around it at its height
+            int stored = FluidloggedCompat.waterLevel(world, pos);
+            if(stored > 0) return waterAbove ? 1.0F : 1.0F - BlockLiquid.getLiquidHeightPercent(state(stored).getValue(BlockLiquid.LEVEL));
             return state.getMaterial().isSolid() ? -1.0F : 0.0F;
         }
         if(waterAbove) return 1.0F;

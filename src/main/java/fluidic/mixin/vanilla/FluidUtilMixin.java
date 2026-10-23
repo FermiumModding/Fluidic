@@ -1,9 +1,11 @@
 package fluidic.mixin.vanilla;
 
 import fluidic.block.WaterFluidHandlers;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.FluidUtil;
 import net.minecraftforge.fluids.capability.IFluidHandler;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,5 +27,16 @@ public abstract class FluidUtilMixin {
     private static void fluidic_waterHandler(World world, BlockPos pos, @Nullable EnumFacing side, CallbackInfoReturnable<IFluidHandler> cir) {
         IFluidHandler handler = WaterFluidHandlers.get(world, pos);
         if(handler != null) cir.setReturnValue(handler);
+    }
+
+    /**
+     * Water poured into Fluidic water goes on top of it, like the vanilla bucket, see ItemBucketMixin. Forge would put a
+     * source block in its place, and the water already there would be lost. Buckets of Fluidlogged API and fluid
+     * containers of other mods pour this way.
+     */
+    @Inject(method = "tryPlaceFluid(Lnet/minecraft/entity/player/EntityPlayer;Lnet/minecraft/world/World;Lnet/minecraft/util/math/BlockPos;Lnet/minecraftforge/fluids/capability/IFluidHandler;Lnet/minecraftforge/fluids/FluidStack;)Z",
+            at = @At("HEAD"), cancellable = true)
+    private static void fluidic_pourIntoWater(@Nullable EntityPlayer player, World world, BlockPos pos, IFluidHandler source, FluidStack resource, CallbackInfoReturnable<Boolean> cir) {
+        if(WaterFluidHandlers.pourOnTop(player, world, pos, source, resource)) cir.setReturnValue(true);
     }
 }

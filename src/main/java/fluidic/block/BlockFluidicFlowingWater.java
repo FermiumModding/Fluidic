@@ -1,5 +1,6 @@
 package fluidic.block;
 
+import fluidic.compat.FluidloggedCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockDynamicLiquid;
 import net.minecraft.block.material.Material;
@@ -31,7 +32,14 @@ public class BlockFluidicFlowingWater extends BlockDynamicLiquid {
     }
 
     private static void settle(World world, BlockPos pos, IBlockState state) {
-        if(!world.isRemote) world.setBlockState(pos, FluidicWater.state(FluidicWater.level(state)), 3);
+        if(world.isRemote) return;
+        IBlockState here = world.getBlockState(pos);
+        // Flowing water Fluidlogged API keeps inside a block turns still there, the block stays
+        if(!FluidicWater.isWater(here)) {
+            if(FluidloggedCompat.waterLevel(world, pos) > 0) FluidloggedCompat.setWater(world, pos, here, FluidicWater.level(state), 3);
+            return;
+        }
+        world.setBlockState(pos, FluidicWater.state(FluidicWater.level(state)), 3);
     }
 
     @Override

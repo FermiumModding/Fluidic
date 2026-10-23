@@ -2,6 +2,7 @@ package fluidic.sim;
 
 import fluidic.block.FluidicWater;
 import fluidic.block.LilyPads;
+import fluidic.compat.FluidloggedCompat;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
@@ -46,6 +47,8 @@ final class WaterWorldListener implements IWorldEventListener {
     private void displaced(World world, BlockPos pos, IBlockState water, IBlockState block) {
         Material material = block.getMaterial();
         if(material == Material.AIR || material == Material.ICE || material == Material.PACKED_ICE) return;
+        // Fluidlogged API kept it inside the new block, as it does for stairs and the like
+        if(FluidloggedCompat.waterLevel(world, pos) > 0) return;
         if(FluidicWater.isReservoir(world, pos, water)) return;
         int amount = FluidicWater.level(water) * Water.UNIT;
         if(WaterSection.holds(Terrain.classify(block))) {

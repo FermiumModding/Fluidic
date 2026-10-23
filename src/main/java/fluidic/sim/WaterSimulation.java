@@ -4,6 +4,7 @@ import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
 import fluidic.block.LilyPads;
+import fluidic.compat.FluidloggedCompat;
 import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -356,7 +357,8 @@ public final class WaterSimulation {
             BlockPos pos = BlockPos.fromLong(removals.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
-            if(FluidicWater.isWater(state)) water.put(removals.getLong(n), FluidicWater.level(state) * Water.UNIT);
+            int level = FluidicWater.isWater(state) ? FluidicWater.level(state) : FluidloggedCompat.waterLevel(world, pos);
+            if(level > 0) water.put(removals.getLong(n), level * Water.UNIT);
         }
         return water;
     }
@@ -420,6 +422,12 @@ public final class WaterSimulation {
             if(FluidicWater.isWater(state)) {
                 level = Math.max(level, FluidicWater.level(state));
             }
+            else if(FluidloggedCompat.canStore(world, pos, state)) {
+                // Kept inside the block, like stairs or a ladder, as a Fluidlogged API fluid state
+                FluidloggedCompat.setWater(world, pos, state, Math.max(level, FluidloggedCompat.waterLevel(world, pos)), 3);
+                setTerrain(pos, Terrain.classify(world, pos, state));
+                continue;
+            }
             else if(!Terrain.isOpen(state)) {
                 // Something moved in since the step ran, keep the water
                 addWater(pos.up(), level * Water.UNIT);
@@ -437,8 +445,17 @@ public final class WaterSimulation {
 
         for(int n = 0; n < step.relevels.size(); n++) {
             BlockPos pos = BlockPos.fromLong(step.relevels.getLong(n));
-            if(!world.isBlockLoaded(pos) || !FluidicWater.isWater(world.getBlockState(pos))) continue;
+            if(!world.isBlockLoaded(pos)) continue;
             int level = step.relevelLevels.getInt(n);
+            IBlockState here = world.getBlockState(pos);
+            if(!FluidicWater.isWater(here)) {
+                // Water kept inside a block by Fluidlogged API
+                if(FluidloggedCompat.waterLevel(world, pos) > 0) {
+                    FluidloggedCompat.setWater(world, pos, here, level, 3);
+                    setTerrain(pos, Terrain.classify(world, pos, here));
+                }
+                continue;
+            }
             IBlockState state = level == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(level);
             place(pos, state, 3);
             setTerrain(pos, Terrain.classify(world, pos, state));
@@ -466,6 +483,12 @@ public final class WaterSimulation {
                 setTerrain(pos, WaterSection.OPEN);
                 addWater(pos, FluidicWater.level(state) * Water.UNIT);
             }
+            else if(Terrain.storesWater(state) && FluidloggedCompat.waterLevel(world, pos) > 0 && removing.add(pos.toLong())) {
+                // Water kept inside a block by Fluidlogged API flows on, the block stays
+                removals.add(pos.toLong());
+                setTerrain(pos, Terrain.classify(state));
+                addWater(pos, FluidloggedCompat.waterLevel(world, pos) * Water.UNIT);
+            }
             else {
                 setTerrain(pos, Terrain.classify(world, pos, state));
             }
@@ -489,7 +512,10 @@ public final class WaterSimulation {
             BlockPos pos = BlockPos.fromLong(removals.getLong(n));
             // Its water is still there as simulated water, the neighbours are not told: plants that need water beside them
             // would check before the simulated water reaches them
-            if(world.isBlockLoaded(pos) && FluidicWater.isWater(world.getBlockState(pos))) place(pos, Blocks.AIR.getDefaultState(), 2);
+            if(!world.isBlockLoaded(pos)) continue;
+            IBlockState state = world.getBlockState(pos);
+            if(FluidicWater.isWater(state)) place(pos, Blocks.AIR.getDefaultState(), 2);
+            else if(FluidloggedCompat.waterLevel(world, pos) > 0) FluidloggedCompat.setWater(world, pos, state, 0, 2);
         }
         removals.clear();
         removing.clear();
@@ -904,11 +930,13 @@ public final class WaterSimulation {
             int level = Water.settleLevel(mass);
             // Shallow water around a flower stays simulated, it only washes the flower away above half a block
             if(code == WaterSection.WASHABLE && level > 0 && level <= Water.LEVELS / 2) continue;
-            // A water block cannot share a ladder, sign or leaves, water there stays simulated and is drawn inside them
-            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS || code == WaterSection.WATERLOGGABLE) && level > 0) continue;
+            // A water block cannot share a ladder, sign or leaves, water there stays simulated and is drawn inside them.
+            // With Fluidlogged API the block keeps it as a fluid state instead.
+            boolean stored = section.canStore(i);
+            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS || code == WaterSection.WATERLOGGABLE) && level > 0 && !stored) continue;
             section.mass[i] = 0;
             // Less than half a level dries up
-            if(level > 0 && WaterSection.isOpen(code)) {
+            if(level > 0 && (WaterSection.isOpen(code) || stored)) {
                 section.terrain[i] = (byte)(WaterSection.SETTLED + level);
                 result.settles.add(blockPos(section, i));
                 result.settleLevels.add(level);
@@ -1170,7 +1198,20 @@ public final class WaterSimulation {
     private void doRefreshTerrain(long key, byte[] terrain) {
         WaterSection section = sections.get(key);
         if(section == null || section.state != WaterSection.STATE_READY) return;
+        section.storable = takeStorable(terrain);
         for(int i = 0; i < 4096; i++) applyTerrain(section, i, terrain[i]);
+    }
+
+    /** Takes the Terrain.STORABLE flags out of a snapshot, null when there are none */
+    private static boolean[] takeStorable(byte[] terrain) {
+        boolean[] storable = null;
+        for(int i = 0; i < 4096; i++) {
+            if((terrain[i] & Terrain.STORABLE) == 0) continue;
+            if(storable == null) storable = new boolean[4096];
+            storable[i] = true;
+            terrain[i] &= ~Terrain.STORABLE;
+        }
+        return storable;
     }
 
     private void applyTerrain(WaterSection section, int i, byte code) {
@@ -1224,6 +1265,7 @@ public final class WaterSimulation {
             section.deferred = null;
             return;
         }
+        section.storable = takeStorable(terrain);
         section.terrain = terrain;
         section.state = WaterSection.STATE_READY;
         section.touched = true;

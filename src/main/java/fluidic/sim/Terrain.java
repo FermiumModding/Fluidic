@@ -4,6 +4,7 @@ import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.BlockDrain;
 import fluidic.block.FluidicWater;
+import fluidic.compat.FluidloggedCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockConcretePowder;
 import net.minecraft.block.BlockSponge;
@@ -84,7 +85,29 @@ public final class Terrain {
 
     /** Terrain code of the block at a position, telling ocean and river reservoirs apart from other water */
     public static byte classify(World world, BlockPos pos, IBlockState state) {
-        return FluidicWater.isReservoir(world, pos, state) ? WaterSection.RESERVOIR : classify(state);
+        if(FluidicWater.isReservoir(world, pos, state)) return WaterSection.RESERVOIR;
+        byte code = classify(state);
+        // Water stored inside the block by Fluidlogged API is settled water there
+        if(FluidloggedCompat.isLoaded() && storesWater(code)) {
+            int level = FluidloggedCompat.waterLevel(world, pos);
+            if(level > 0) return (byte)(WaterSection.SETTLED + level);
+        }
+        return code;
+    }
+
+    /**
+     * Marks a snapshot cell whose block can hold settled water as a Fluidlogged API fluid state, the simulation keeps
+     * the flag apart from the code. Codes stay below it.
+     */
+    public static final byte STORABLE = 0x20;
+
+    /** Blocks water stays inside of, which Fluidlogged API can keep it in as a fluid state, not plants it washes away */
+    public static boolean storesWater(IBlockState state) {
+        return storesWater(classify(state));
+    }
+
+    private static boolean storesWater(byte code) {
+        return code == WaterSection.PERMEABLE || code == WaterSection.WATERLOGGABLE || code == WaterSection.POROUS;
     }
 
     public static boolean isOpen(IBlockState state) {
@@ -239,13 +262,22 @@ public final class Terrain {
         }
         // Full water below sea level may be part of an ocean or river
         boolean belowSea = sy * 16 < world.getSeaLevel();
+        boolean fluidlogged = FluidloggedCompat.isLoaded();
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for(int z = 0; z < 16; z++) {
             for(int x = 0; x < 16; x++) {
                 // Columns go down from the top, full water right under the sea is the sea too without looking it up
                 boolean seaAbove = false;
                 for(int y = 15; y >= 0; y--) {
-                    byte code = classify(storage.get(x, y, z));
+                    IBlockState state = storage.get(x, y, z);
+                    byte code = classify(state);
+                    if(fluidlogged && storesWater(code)) {
+                        // Water Fluidlogged API keeps inside the block is settled water, the block may take settling water
+                        pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z);
+                        int level = FluidloggedCompat.waterLevel(chunk, pos);
+                        if(level > 0) code = (byte)(WaterSection.SETTLED + level | STORABLE);
+                        else if(FluidloggedCompat.canStore(world, pos, state)) code |= STORABLE;
+                    }
                     if(belowSea && code == WaterSection.SETTLED + Water.LEVELS && sy * 16 + y < world.getSeaLevel()
                             && (seaAbove || Reservoirs.isReservoir(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z)))) {
                         code = WaterSection.RESERVOIR;

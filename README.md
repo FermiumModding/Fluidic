@@ -108,10 +108,26 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * Fences, walls, doors and other partial blocks that block movement are solid unless listed as permeable
   in `Block Classifications`.
 
+## Fluidlogged API
+
+Fluidlogged API is optional. With it installed (`compat/FluidloggedCompat`):
+
+* Water that settles inside a block Fluidlogged API can fluidlog, like a ladder, sign or stairs, is kept there as its
+  fluid state, not as simulated water. Its fluid states of Fluidic water are settled water to the simulation, and
+  are woken back into it when something nearby changes, leaving the block in place. Water it keeps inside a block
+  that `Block Classifications` does not let water into, like stairs without a `waterloggable` entry, stays sealed
+  there, as poured in with a bucket. Fluidlogged API draws it.
+* A block placed into water that Fluidlogged API fluidlogs keeps the water inside, nothing is pushed out of it.
+* Its buckets and other Forge fluid containers pour into a pool on top of the water there (`FluidUtilMixin`).
+* It draws water with Forge's fluid model. Fluidic's corner heights are handed to it (`getExtendedState`), so water
+  looks the same either way, apart from side faces between water at different heights, which reach down to the
+  bottom of the block.
+
 ## Building
 
 ```
 ./gradlew build
 ```
 
-Gradle must run on Java 17+. The mod itself is compiled with a Java 8 toolchain.
+Gradle must run on Java 17+. The mod itself is compiled with a Java 8 toolchain. Fluidic compiles against Fluidlogged
+API, dev runs load it with `./gradlew -Pfluidlogged runClient`.

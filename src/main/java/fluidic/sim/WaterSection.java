@@ -82,6 +82,15 @@ final class WaterSection {
     final int[] mass = new int[4096];
     private final byte[] flags = new byte[4096];
     byte[] terrain;
+    /**
+     * Cells of blocks that keep settled water inside them as a Fluidlogged API fluid state, like stairs, null without
+     * Fluidlogged API. From the last terrain snapshot, the server checks again before storing water.
+     */
+    boolean[] storable;
+
+    boolean canStore(int i) {
+        return storable != null && storable[i];
+    }
     int state = STATE_PENDING;
     final WaterSection[] neighbors = new WaterSection[6];
 

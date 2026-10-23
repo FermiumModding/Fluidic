@@ -22,6 +22,8 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
+import net.minecraftforge.common.property.IExtendedBlockState;
+import net.minecraftforge.fluids.BlockFluidBase;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
@@ -78,7 +80,17 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     static void neighborChanged(World world, BlockPos pos, IBlockState state) {
         WaterSimulation simulation = SimManager.get(world);
-        if(simulation != null) simulation.neighborChanged(pos, FluidicWater.level(state), FluidicWater.isReservoir(world, pos, state));
+        if(simulation == null) return;
+        // Water Fluidlogged API keeps inside a block was just placed or changed there without the block changing, the
+        // simulation is told about it here
+        IBlockState here = world.getBlockState(pos);
+        if(!FluidicWater.isWater(here)) {
+            // Sealed inside a block water cannot pass through for Fluidic, like stairs unless the config lists them, it
+            // stays there. Taken out it could only go on top of the block.
+            if(!Terrain.storesWater(here)) return;
+            simulation.setTerrain(pos, Terrain.classify(world, pos, here));
+        }
+        simulation.neighborChanged(pos, FluidicWater.level(state), FluidicWater.isReservoir(world, pos, state));
     }
 
     @Override
@@ -91,6 +103,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     public void randomTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
         // Vanilla still water does nothing on random ticks
         if(world.isRemote || !FluidicWater.isFinite(world)) return;
+        // Water Fluidlogged API keeps inside a block, the block here is not water. The simulation looks after it.
+        if(!FluidicWater.isWater(world.getBlockState(pos))) return;
         int level = FluidicWater.level(state);
         boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid();
         // A full block under more water, the inside of a lake or the sea, neither moves nor dries up. Most random
@@ -343,6 +357,31 @@ public class BlockFluidicWater extends BlockStaticLiquid {
             return FluidicWater.renderHeight(world, pos) >= 1.0F && FluidicWater.renderHeight(world, offset) < 1.0F;
         }
         return super.shouldSideBeRendered(state, world, pos, side);
+    }
+
+    /**
+     * Fluidlogged API draws water with Forge's fluid model, shaped by the corner heights of this extended state, instead
+     * of the vanilla fluid renderer Fluidic gives its corner heights to. Fluidic's corner heights go in here instead, so
+     * water looks the same with it: flat next to falling water, meeting simulated water, full under blocks. Without it
+     * the state has no corners and is left as it is.
+     */
+    @Override
+    @Nonnull
+    public IBlockState getExtendedState(@Nonnull IBlockState state, @Nonnull IBlockAccess world, @Nonnull BlockPos pos) {
+        IBlockState extended = super.getExtendedState(state, world, pos);
+        if(!(extended instanceof IExtendedBlockState) || !FluidicWater.isFinite(world)) return extended;
+        // Water kept inside a block like stairs, Fluidlogged API shapes it around the block itself
+        if(!FluidicWater.isWater(world.getBlockState(pos))) return extended;
+        FluidicWater.beginRendering(pos);
+        // Forge's order: the corners at low x low z, low x high z, high x high z, high x low z
+        BlockPos[] corners = {pos, pos.south(), pos.south().east(), pos.east()};
+        IExtendedBlockState shaped = (IExtendedBlockState)extended;
+        for(int i = 0; i < 4; i++) {
+            // Just under the top, a full height top would flicker against a block above
+            float height = Math.min(FluidicWater.cornerHeight(world, corners[i]), 1.0F - 1.0E-3F);
+            shaped = shaped.withProperty(BlockFluidBase.LEVEL_CORNERS[i], height);
+        }
+        return shaped;
     }
 
     /** Vanilla plays a flowing sound for partly filled water, Fluidic water is still at any level */

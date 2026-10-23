@@ -60,6 +60,9 @@ dependencies {
     annotationProcessor "io.github.llamalad7:mixinextras-common:${mixin_extras_version}"
 
     implementation fg.deobf("curse.maven:fermiumbooter-${fermiumbooter_version}")
+    // Optional, Fluidic stores water inside blocks as its fluid states when it is installed. Dev runs load it with -Pfluidlogged.
+    compileOnly fg.deobf("curse.maven:fluidlogged-api-${fluidlogged_version}")
+    if(project.hasProperty("fluidlogged")) runtimeOnly fg.deobf("curse.maven:fluidlogged-api-${fluidlogged_version}")
 	
 }
 

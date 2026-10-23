@@ -6,7 +6,10 @@ import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Blocks;
+import net.minecraft.init.SoundEvents;
+import net.minecraft.util.SoundCategory;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.Fluid;
@@ -39,6 +42,29 @@ public final class WaterFluidHandlers {
         if(FluidicWater.isWater(state)) return new BlockHandler(world, pos);
         if(state.getBlock().hasTileEntity(state) || !Terrain.isOpen(state) && !Terrain.holdsWater(state)) return null;
         return SimulatedWater.height(world, pos.getX(), pos.getY(), pos.getZ()) > 0 ? new SimulatedHandler(world, pos) : null;
+    }
+
+    /**
+     * Pours a bucket's worth of water from a container into Fluidic water: it goes on top of the water there through
+     * the simulation, like the vanilla bucket poured into a pool. Returns whether it did, false leaves it to Forge, which
+     * would put a source block in place of the water there.
+     */
+    public static boolean pourOnTop(@Nullable EntityPlayer player, @Nullable World world, @Nullable BlockPos pos, IFluidHandler source, @Nullable FluidStack resource) {
+        if(world == null || pos == null || !isWater(resource) || resource.amount < Fluid.BUCKET_VOLUME || !FluidicWater.isFinite(world)) return false;
+        if(!world.isBlockLoaded(pos) || !FluidicWater.isWater(world.getBlockState(pos)) || world.provider.doesWaterVaporize()) return false;
+        // The client only predicts the container emptying, the server adds the water
+        WaterSimulation simulation = SimManager.get(world);
+        if(!world.isRemote && simulation == null) return false;
+        FluidStack drained = source.drain(new FluidStack(FluidRegistry.WATER, Fluid.BUCKET_VOLUME), true);
+        if(drained == null || drained.amount < Fluid.BUCKET_VOLUME) return false;
+        if(simulation != null) {
+            BlockPos top = pos;
+            while(top.getY() < 255 && FluidicWater.isWater(world.getBlockState(top.up()))) top = top.up();
+            simulation.addWater(top.up(), Water.FULL);
+        }
+        // The server plays it to everyone but the player, whose own client plays it, as vanilla does
+        world.playSound(player, pos, SoundEvents.ITEM_BUCKET_EMPTY, SoundCategory.BLOCKS, 1.0F, 1.0F);
+        return true;
     }
 
     private static boolean isWater(@Nullable FluidStack resource) {
