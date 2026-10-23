@@ -121,7 +121,7 @@ public final class Reservoirs {
                 world.getSeaLevel(), top.getY(), world.getBlockState(top.up()).getBlock().getRegistryName(), world.getLightFor(EnumSkyBlock.SKY, top.up()));
         return String.format("endless %s (remembered %s), surface %s, %d surface columns searched, reservoir biome %s%s",
                 reservoir ? "yes" : "no", cached, surface, search.columnsSearched, search.biomeFound ? "found" : "not found",
-                search.cutShort ? ", ran into unloaded chunks" : "") + details;
+                (search.unloaded ? ", ran into unloaded chunks" : "") + (search.tooDeep ? ", gave up looking for the surface" : "")) + details;
     }
 
     /**
@@ -220,6 +220,10 @@ public final class Reservoirs {
         private int chunkX = Integer.MIN_VALUE, chunkZ = Integer.MIN_VALUE;
         /** Ran into unloaded chunks, a no may be wrong */
         private boolean cutShort;
+        /** Gave up looking for the surface after searching as far as it may */
+        private boolean tooDeep;
+        /** Ran into an unloaded chunk */
+        private boolean unloaded;
         /** What the search found, for {@link #describe} */
         private long surfaceFound = NONE;
         private int columnsSearched;
@@ -234,6 +238,13 @@ public final class Reservoirs {
 
         boolean run(BlockPos pos) {
             boolean reservoir = search(pos);
+            if(!reservoir && tooDeep && !unloaded) {
+                // Searched as far as it may without reaching the surface. Every block it passed would search the same
+                // water again, in a large body of water that never reaches the surface each of them as far, so they all
+                // keep the no for a little while.
+                remembered.remember(seen, ((now - REMEMBER_TICKS + RECHECK_TICKS) << 1), now);
+                return false;
+            }
             if(!reservoir && cutShort) {
                 // Not knowing what lies in unloaded chunks or past where the search stopped, a no is only kept a little
                 // while, and only for this block. The blocks it passed may well reach the surface on their own, water
@@ -292,7 +303,13 @@ public final class Reservoirs {
         private boolean isSurface(int x, int y, int z) {
             if(y == surfaceY) return true;
             if(y < surfaceY - MAX_LOWERED) return false;
-            return !isWater(x, y + 1, z) && FluidicWater.isUnderSky(world, cell.setPos(x, y + 1, z));
+            Chunk at = chunk(x, z);
+            if(at == null || FluidicWater.isWater(at.getBlockState(x, y + 1, z))) return false;
+            // Open to the sky by the height map. Light is not always up to date in newly generated chunks: lily pads and
+            // plants generated where water was keep the dimmer light the water left under them, and every search there
+            // would spread through the whole swamp without finding its surface.
+            if(at.getHeightValue(x & 15, z & 15) <= y + 2 && !at.getBlockState(x, y + 1, z).getMaterial().blocksMovement()) return true;
+            return FluidicWater.isUnderSky(world, cell.setPos(x, y + 1, z));
         }
 
         /** Same as BlockPos.toLong, without making a BlockPos */
@@ -331,6 +348,7 @@ public final class Reservoirs {
                 }
                 if(++searched > MAX_DEPTH_SEARCH) {
                     cutShort = true;
+                    tooDeep = true;
                     return NONE;
                 }
                 long at = level.removeLong(level.size() - 1);
@@ -391,6 +409,7 @@ public final class Reservoirs {
             Chunk at = chunk(x, z);
             if(at == null) {
                 cutShort = true;
+                unloaded = true;
                 return NONE;
             }
             // The column is in one chunk
@@ -423,6 +442,7 @@ public final class Reservoirs {
             Chunk at = chunk(x, z);
             if(at == null) {
                 cutShort = true;
+                unloaded = true;
                 return NONE;
             }
             if(!FluidicWater.isWater(at.getBlockState(x, y, z))) return NONE;
