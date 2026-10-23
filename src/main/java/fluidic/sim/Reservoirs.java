@@ -177,9 +177,16 @@ public final class Reservoirs {
 
         boolean run(BlockPos pos) {
             boolean reservoir = search(pos);
-            // Not knowing what lies in unloaded chunks, a no is only kept a little while
-            long stamp = !reservoir && cutShort ? now - REMEMBER_TICKS + RECHECK_TICKS : now;
-            remembered.remember(seen, (stamp << 1) | (reservoir ? 1L : 0L), now);
+            if(!reservoir && cutShort) {
+                // Not knowing what lies in unloaded chunks or past where the search stopped, a no is only kept a little
+                // while, and only for this block. The blocks it passed may well reach the surface on their own, water
+                // around a hole dug deep in the sea would otherwise all count as cut off from it and wake up.
+                LongArrayList start = new LongArrayList();
+                start.add(pos.toLong());
+                remembered.remember(start, ((now - REMEMBER_TICKS + RECHECK_TICKS) << 1), now);
+                return false;
+            }
+            remembered.remember(seen, (now << 1) | (reservoir ? 1L : 0L), now);
             return reservoir;
         }
 
@@ -214,19 +221,40 @@ public final class Reservoirs {
             return !FluidicWater.isWater(world.getBlockState(at.up())) && FluidicWater.isUnderSky(world, at.up());
         }
 
-        /** Spreads through the water below sea level until it reaches the surface layer, NONE if it does not */
+        /**
+         * Spreads through the water below sea level until it reaches the surface layer, NONE if it does not. The
+         * highest water is followed first: water under a block placed deep in the sea goes around it and straight up,
+         * spreading evenly would fill a ball of water around it and stop long before the surface.
+         */
         private long findSurface(BlockPos pos) {
-            LongArrayList queue = new LongArrayList();
-            queue.add(pos.toLong());
-            for(int n = 0; n < queue.size() && queue.size() < MAX_DEPTH_SEARCH; n++) {
-                BlockPos at = BlockPos.fromLong(queue.getLong(n));
+            LongArrayList[] levels = new LongArrayList[surfaceY + 1];
+            int top = pos.getY();
+            levels[top] = new LongArrayList();
+            levels[top].add(pos.toLong());
+            int searched = 0;
+            while(top >= 0) {
+                LongArrayList level = levels[top];
+                if(level == null || level.isEmpty()) {
+                    top--;
+                    continue;
+                }
+                if(++searched > MAX_DEPTH_SEARCH) {
+                    cutShort = true;
+                    return NONE;
+                }
+                BlockPos at = BlockPos.fromLong(level.removeLong(level.size() - 1));
                 for(EnumFacing facing : FACINGS) {
                     long next = water(at, facing);
                     if(next == NONE) continue;
-                    if(isSurface(BlockPos.fromLong(next))) return next;
-                    queue.add(next);
+                    BlockPos found = BlockPos.fromLong(next);
+                    if(isSurface(found)) return next;
+                    int y = found.getY();
+                    if(levels[y] == null) levels[y] = new LongArrayList();
+                    levels[y].add(next);
+                    top = Math.max(top, y);
                 }
             }
+            // Every connected block below the surface layer was searched, the water is shut off from it
             return NONE;
         }
 

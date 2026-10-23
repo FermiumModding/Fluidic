@@ -40,6 +40,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -51,6 +52,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -145,6 +147,12 @@ public final class WaterSimulation {
     private volatile boolean sunny;
     /** Raining or thundering, written by the server thread every tick */
     private volatile boolean raining;
+    /** Number of the last step */
+    private long stepSeq;
+    /** Steps given to the server thread, kept until it applied them, a save counts the settled water of the rest */
+    private final ArrayDeque<StepResult> handedOff = new ArrayDeque<>();
+    /** Number of the last step the server thread applied, written by it */
+    private volatile long appliedSeq;
     /** The last bucket take carried out */
     private long takesDone;
     /** The last bucket take whose result is in the published heights, reservations up to it are dropped */
@@ -301,12 +309,24 @@ public final class WaterSimulation {
      * water and leaves out the water of woken blocks still in the world. Writing the file happens in the background.
      */
     public void save() {
+        // What the world's chunks were saved with: the steps applied so far, the woken blocks still in place, and the
+        // commands sent so far. The simulation takes its snapshot after the step it is on, the server goes on meanwhile.
+        long savedThrough = appliedSeq;
         Long2IntOpenHashMap inWorld = wokenWater();
+        SaveMarker marker = new SaveMarker();
+        enqueue(marker);
         try {
-            NBTTagCompound tag = executor.submit(() -> serialize(inWorld)).get(10, TimeUnit.SECONDS);
-            writer.execute(() -> writeSaveFile(tag));
+            executor.execute(() -> {
+                try {
+                    NBTTagCompound tag = serialize(inWorld, savedThrough, marker);
+                    writer.execute(() -> writeSaveFile(tag));
+                }
+                catch(Exception ex) {
+                    Fluidic.LOGGER.error("Failed to save water simulation of dimension " + dimension, ex);
+                }
+            });
         }
-        catch(Exception ex) {
+        catch(RejectedExecutionException ex) {
             Fluidic.LOGGER.error("Failed to save water simulation of dimension " + dimension, ex);
         }
     }
@@ -314,15 +334,15 @@ public final class WaterSimulation {
     /** Stops the simulation thread and saves everything, including settled water that never got placed */
     public void shutdown() {
         executor.shutdown();
-        writer.shutdown();
         try {
             if(!executor.awaitTermination(10, TimeUnit.SECONDS)) {
                 Fluidic.LOGGER.warn("Water simulation of dimension " + dimension + " did not stop in time");
                 return;
             }
             // An earlier save still being written must not land after this one
+            writer.shutdown();
             writer.awaitTermination(10, TimeUnit.SECONDS);
-            writeSaveFile(serialize(wokenWater()));
+            writeSaveFile(serialize(wokenWater(), appliedSeq, null));
         }
         catch(InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -456,6 +476,7 @@ public final class WaterSimulation {
             if(payload.afterBlocks) latePayloads.add(payload);
             else send(payload);
         }
+        appliedSeq = step.seq;
     }
 
     /** Turns lava touched by water into a block, with the hiss and smoke of vanilla lava meeting water */
@@ -595,8 +616,17 @@ public final class WaterSimulation {
     private void runStep() {
         try {
             long start = System.nanoTime();
+            long applied = appliedSeq;
+            while(!handedOff.isEmpty() && handedOff.peekFirst().seq <= applied) handedOff.pollFirst();
             Consumer<WaterSimulation> command;
-            while((command = commands.poll()) != null) command.accept(this);
+            while((command = commands.poll()) != null) {
+                // A save waiting to run after this step, the commands sent after it wait for the step after
+                if(command instanceof SaveMarker) {
+                    ((SaveMarker)command).passed = true;
+                    break;
+                }
+                command.accept(this);
+            }
             step();
             statStepNanos = (statStepNanos * 19 + System.nanoTime() - start) / 20;
             statSteps = stepCount;
@@ -605,6 +635,8 @@ public final class WaterSimulation {
             Fluidic.LOGGER.error("Water simulation of dimension " + dimension + " failed a step", ex);
         }
         finally {
+            result.seq = ++stepSeq;
+            handedOff.addLast(result);
             results.add(result);
             result = new StepResult();
             stepping.set(false);
@@ -1317,14 +1349,18 @@ public final class WaterSimulation {
      * applied yet is not in the world, it is saved as simulated water. Woken blocks still in the world, given by
      * position, hold their water there, it is left out.
      */
-    private NBTTagCompound serialize(Long2IntOpenHashMap inWorld) {
-        // Water poured, rained or woken that has not reached the grid yet
+    private NBTTagCompound serialize(Long2IntOpenHashMap inWorld, long savedThrough, SaveMarker marker) {
+        // Water poured, rained or woken that has not reached the grid yet, up to the save. Commands sent after it
+        // belong to world changes the saved chunks do not have, they stay for the next step.
         Consumer<WaterSimulation> command;
-        while((command = commands.poll()) != null) command.accept(this);
+        if(marker == null || !marker.passed) {
+            while((command = commands.poll()) != null && command != marker) command.accept(this);
+        }
         for(WaterSection section : sections.values()) section.releaseRain();
 
         Long2ObjectOpenHashMap<int[]> adjusted = new Long2ObjectOpenHashMap<>();
-        for(StepResult step : results) {
+        for(StepResult step : handedOff) {
+            if(step.seq <= savedThrough) continue;
             for(int n = 0; n < step.settles.size(); n++) {
                 BlockPos pos = BlockPos.fromLong(step.settles.getLong(n));
                 if(pos.getY() < 0 || pos.getY() > 255) continue;
@@ -1352,6 +1388,15 @@ public final class WaterSimulation {
         root.setTag("sections", list);
         root.setTag("sponges", soaked);
         return root;
+    }
+
+    /** Marks where a save comes in the commands, the ones before it are part of what it saves */
+    private static final class SaveMarker implements Consumer<WaterSimulation> {
+        /** A step reached it before the save ran, the commands before it are in the grid already */
+        boolean passed;
+
+        @Override
+        public void accept(WaterSimulation simulation) {}
     }
 
     private static void appendCells(NBTTagList list, long key, int[] mass) {

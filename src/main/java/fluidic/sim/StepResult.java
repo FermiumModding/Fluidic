@@ -12,6 +12,9 @@ import java.util.UUID;
  */
 final class StepResult {
 
+    /** Number of the step, counting up, the server thread applies them in order */
+    long seq;
+
     /** Block positions (BlockPos#toLong) of water that settled, with its level in {@link #settleLevels} */
     final LongArrayList settles = new LongArrayList();
     final IntArrayList settleLevels = new IntArrayList();
