@@ -62,6 +62,9 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   eighth at a time from the highest blocks, and only fills when there is a whole block to take, so no water
   is created and the vanilla infinite water source no longer works. Poured into water, a bucket adds a block
   of water on top of it.
+* **Lily pads**. Lily pads float on water more than half full, simulated water too, and follow the water
+  level (`LilyPads`): water rising into a pad lifts it, and a pad whose water went down sinks to the new
+  surface up to 4 blocks below. They only break when there is no water near enough.
 * **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,
   and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
   sponge touching an ocean or river fills up at once.

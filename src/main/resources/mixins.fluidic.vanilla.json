@@ -6,15 +6,18 @@
   "target": "@env(DEFAULT)",
   "minVersion": "0.8",
   "mixins": [
+    "vanilla.BlockBushMixin",
     "vanilla.BlockConcretePowderMixin",
     "vanilla.BlockFarmlandMixin",
+    "vanilla.BlockLilyPadMixin",
     "vanilla.BlockMixin",
     "vanilla.BlockSpongeMixin",
     "vanilla.EntityBoatMixin",
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",
+    "vanilla.EntityXPOrbMixin",
     "vanilla.ItemBucketMixin",
-    "vanilla.EntityXPOrbMixin"
+    "vanilla.ItemLilyPadMixin"
   ],
   "client": [
     "vanilla.BlockFluidRendererMixin",

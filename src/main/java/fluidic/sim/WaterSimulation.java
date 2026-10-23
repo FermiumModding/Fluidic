@@ -3,6 +3,7 @@ package fluidic.sim;
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
+import fluidic.block.LilyPads;
 import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -263,6 +264,8 @@ public final class WaterSimulation {
             BlockPos pos = BlockPos.fromLong(step.washes.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
+            // A lily pad floats up on the rising water
+            if(state.getBlock() == Blocks.WATERLILY && LilyPads.floatUp(world, pos, state)) continue;
             // Breaks with drops and effects, and updates neighbours so the other half of tall plants goes too
             if(Terrain.isWashable(state)) world.destroyBlock(pos, true);
             else setTerrain(pos, Terrain.classify(world, pos, state));
