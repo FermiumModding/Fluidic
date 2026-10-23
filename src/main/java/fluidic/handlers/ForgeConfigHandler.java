@@ -233,6 +233,13 @@ public class ForgeConfigHandler {
 		@Config.Name("Fountain Output")
 		@Config.RangeDouble(min = 0.05D, max = 64.0D)
 		public double fountainOutput = 1.0D;
+
+		@Config.Comment({
+				"Simulated water pushes entities as hard as vanilla flowing water wherever it visibly flows, instead of",
+				"scaling the push with how steep its surface is. Small differences of a pool evening out still push nothing.",
+				"Players in multiplayer move by their own client's setting, so set it the same on clients."})
+		@Config.Name("Vanilla Water Push Strength")
+		public boolean vanillaPushStrength = false;
 	}
 
 	public static class ClientConfig {

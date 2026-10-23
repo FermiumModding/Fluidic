@@ -1,5 +1,6 @@
 package fluidic.sim;
 
+import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -127,6 +128,8 @@ public final class SimulatedWater {
         // that is still evening out
         double slope = Math.sqrt(current.x * current.x + current.z * current.z);
         double strength = MathHelper.clamp((slope - MIN_SLOPE) / (FULL_SLOPE - MIN_SLOPE), 0.0D, 1.0D);
+        // Or as hard as vanilla flowing water wherever it flows at all
+        if(strength > 0.0D && ForgeConfigHandler.server.vanillaPushStrength) strength = 1.0D;
         if(strength > 0.0D) {
             entity.motionX += current.x / slope * strength * 0.014D;
             entity.motionZ += current.z / slope * strength * 0.014D;

@@ -106,7 +106,7 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * Mixins are loaded through FermiumBooter in two configs. `mixins.fluidic.vanilla.json` is always loaded by
   the coremod (`FluidicPlugin`): rendering, buckets, lily pads, sponges, fluid handlers and world generation.
   `mixins.fluidic.entity.json` is switched by `Enable Flowing Water Entity Physics`: entities swimming in,
-  being carried by and drowning in water that is still moving, boats, mobs pathing around it, fishing in it,
+  being carried by (harder with `Vanilla Water Push Strength`, as hard as vanilla flowing water wherever it flows) and drowning in water that is still moving, boats, mobs pathing around it, fishing in it,
   and farmland, concrete powder and sugar cane next to it. Water mobs like squid spawn in full water only,
   settled or still moving, not in partly filled water. Turned off, only settled water affects these, and water
   mobs spawn in any water as in vanilla.
