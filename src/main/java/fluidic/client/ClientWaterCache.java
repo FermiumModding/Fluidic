@@ -3,6 +3,7 @@ package fluidic.client;
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
+import fluidic.sim.SectionHeights;
 import fluidic.sim.Water;
 import net.minecraft.client.Minecraft;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
@@ -16,7 +17,6 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.relauncher.Side;
 
 import java.util.Iterator;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Heights of simulated water received from the server, one byte per block (255 = full). Written on the client
@@ -30,15 +30,11 @@ public final class ClientWaterCache {
     /** Most ticks settled water keeps its simulated drawing while waiting for the chunk to redraw with the new blocks */
     private static final int SETTLE_OVERLAP_TICKS = 60;
 
-    private static final ConcurrentHashMap<Long, byte[]> SECTIONS = new ConcurrentHashMap<>();
+    private static final SectionHeights SECTIONS = new SectionHeights();
     /** The heights sections switch to once the water that settled in them stops being drawn */
     private static final Long2ObjectOpenHashMap<Deferred> DEFERRED = new Long2ObjectOpenHashMap<>();
     private static int dimension = Integer.MIN_VALUE;
     private static int ticks;
-
-    // Single entry lookup cache for the client thread, mesh building asks for the same section over and over
-    private static long lastKey = Long.MIN_VALUE;
-    private static byte[] lastSection;
 
     private ClientWaterCache() {}
 
@@ -100,7 +96,6 @@ public final class ClientWaterCache {
         Minecraft mc = Minecraft.getMinecraft();
         byte[] old = heights == null ? SECTIONS.remove(key) : SECTIONS.put(key, heights);
         if(old == null && heights == null) return;
-        lastKey = Long.MIN_VALUE;
 
         // Work out what changed, so only what depends on it is redrawn
         int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
@@ -134,12 +129,12 @@ public final class ClientWaterCache {
     }
 
     public static void unloadChunk(int cx, int cz) {
+        ChunkRedraws.unloadChunk(cx, cz);
         for(int sy = 0; sy < 16; sy++) {
             long key = Water.sectionKey(cx, sy, cz);
             DEFERRED.remove(key);
             if(SECTIONS.remove(key) != null) WaterRenderer.markDirty(key, ALL_BORDERS);
         }
-        lastKey = Long.MIN_VALUE;
     }
 
     /** A block changed, simulated water beside it draws its faces and corners against it */
@@ -164,8 +159,6 @@ public final class ClientWaterCache {
         SECTIONS.clear();
         DEFERRED.clear();
         ChunkRedraws.clear();
-        lastKey = Long.MIN_VALUE;
-        lastSection = null;
         dimension = Integer.MIN_VALUE;
         WaterRenderer.clear();
     }
@@ -184,13 +177,7 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, client thread only */
     public static int height(int x, int y, int z) {
-        if(y < 0 || y > 255) return 0;
-        long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
-        if(key != lastKey) {
-            lastKey = key;
-            lastSection = SECTIONS.get(key);
-        }
-        return lastSection == null ? 0 : lastSection[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
+        return SECTIONS.height(x, y, z);
     }
 
     private static final class Deferred {
@@ -205,9 +192,7 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, safe from any thread */
     public static int heightAnyThread(int x, int y, int z) {
-        if(y < 0 || y > 255) return 0;
-        byte[] section = SECTIONS.get(Water.sectionKey(x >> 4, y >> 4, z >> 4));
-        return section == null ? 0 : section[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
+        return SECTIONS.height(x, y, z);
     }
 
 }

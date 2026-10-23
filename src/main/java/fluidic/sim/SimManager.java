@@ -45,9 +45,11 @@ public final class SimManager {
     }
 
     public static WaterSimulation load(WorldServer world) {
-        WaterSimulation simulation = new WaterSimulation(world);
-        WaterSimulation old = SIMULATIONS.put(world.provider.getDimension(), simulation);
+        // A simulation left over saves first, the new one reads what it saved
+        WaterSimulation old = SIMULATIONS.remove(world.provider.getDimension());
         if(old != null) old.shutdown();
+        WaterSimulation simulation = new WaterSimulation(world);
+        SIMULATIONS.put(world.provider.getDimension(), simulation);
         world.addEventListener(new WaterWorldListener(simulation));
         return simulation;
     }

@@ -240,14 +240,17 @@ public final class Terrain {
         // Full water below sea level may be part of an ocean or river
         boolean belowSea = sy * 16 < world.getSeaLevel();
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for(int y = 0; y < 16; y++) {
-            for(int z = 0; z < 16; z++) {
-                for(int x = 0; x < 16; x++) {
+        for(int z = 0; z < 16; z++) {
+            for(int x = 0; x < 16; x++) {
+                // Columns go down from the top, full water right under the sea is the sea too without looking it up
+                boolean seaAbove = false;
+                for(int y = 15; y >= 0; y--) {
                     byte code = classify(storage.get(x, y, z));
                     if(belowSea && code == WaterSection.SETTLED + Water.LEVELS && sy * 16 + y < world.getSeaLevel()
-                            && Reservoirs.isReservoir(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z))) {
+                            && (seaAbove || Reservoirs.isReservoir(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z)))) {
                         code = WaterSection.RESERVOIR;
                     }
+                    seaAbove = code == WaterSection.RESERVOIR;
                     terrain[Water.cellIndex(x, y, z)] = code;
                 }
             }

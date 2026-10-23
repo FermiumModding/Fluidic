@@ -39,9 +39,6 @@ public final class ChunkWater {
     private static final AtomicInteger EMPTY_REDRAWS = new AtomicInteger();
     private static volatile boolean seenLookups;
 
-    private static boolean searchedShaders;
-    private static Field shaderPackLoaded;
-
     private ChunkWater() {}
 
     public static boolean isActive() {
@@ -129,58 +126,63 @@ public final class ChunkWater {
         if(mc.world != null) mc.world.markBlockRangeForRenderUpdate(x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
     }
 
-    private static boolean searchedTags;
-    private static Method pushEntity, popEntity;
-
-    /** Tags the vertices drawn next as the given block for OptiFine shaders, which tell water by it */
-    public static void tagAs(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer) {
-        if(!searchedTags) {
-            searchedTags = true;
-            try {
-                Class<?> builder = Class.forName("net.optifine.shaders.SVertexBuilder");
-                pushEntity = builder.getMethod("pushEntity", IBlockState.class, BlockPos.class, IBlockAccess.class, BufferBuilder.class);
-                popEntity = builder.getMethod("popEntity", BufferBuilder.class);
-            }
-            catch(ReflectiveOperationException | LinkageError ignored) {
-                pushEntity = popEntity = null;
-            }
-        }
-        if(pushEntity == null || !isShaderPackLoaded()) return;
+    /**
+     * Tags the vertices drawn next as the given block for OptiFine shaders, which tell water by it. Returns whether
+     * it did, then {@link #untag} has to be called once they are drawn.
+     */
+    public static boolean tagAs(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer) {
+        if(OptiFine.PUSH_ENTITY == null || OptiFine.POP_ENTITY == null || !isShaderPackLoaded()) return false;
         try {
-            pushEntity.invoke(null, state, pos, world, buffer);
+            OptiFine.PUSH_ENTITY.invoke(null, state, pos, world, buffer);
+            return true;
         }
         catch(ReflectiveOperationException ex) {
-            pushEntity = null;
+            return false;
         }
     }
 
     public static void untag(BufferBuilder buffer) {
-        if(pushEntity == null || popEntity == null || !isShaderPackLoaded()) return;
         try {
-            popEntity.invoke(null, buffer);
+            OptiFine.POP_ENTITY.invoke(null, buffer);
         }
         catch(ReflectiveOperationException ex) {
-            popEntity = null;
+            Fluidic.LOGGER.error("Could not untag water vertices for shaders", ex);
         }
     }
 
     private static boolean isShaderPackLoaded() {
-        if(!searchedShaders) {
-            searchedShaders = true;
-            for(String name : new String[] {"net.optifine.shaders.Shaders", "shadersmod.client.Shaders"}) {
-                try {
-                    shaderPackLoaded = Class.forName(name).getField("shaderPackLoaded");
-                    break;
-                }
-                catch(ReflectiveOperationException | LinkageError ignored) {}
-            }
-        }
-        if(shaderPackLoaded == null) return false;
+        if(OptiFine.SHADER_PACK_LOADED == null) return false;
         try {
-            return shaderPackLoaded.getBoolean(null);
+            return OptiFine.SHADER_PACK_LOADED.getBoolean(null);
         }
         catch(IllegalAccessException ex) {
             return false;
+        }
+    }
+
+    /** OptiFine's shader hooks, looked up once by whichever thread asks first, class initialisation is thread safe */
+    private static final class OptiFine {
+        static final Method PUSH_ENTITY = method("pushEntity", IBlockState.class, BlockPos.class, IBlockAccess.class, BufferBuilder.class);
+        static final Method POP_ENTITY = method("popEntity", BufferBuilder.class);
+        static final Field SHADER_PACK_LOADED = shaderPackLoaded();
+
+        private static Method method(String name, Class<?>... parameters) {
+            try {
+                return Class.forName("net.optifine.shaders.SVertexBuilder").getMethod(name, parameters);
+            }
+            catch(ReflectiveOperationException | LinkageError ex) {
+                return null;
+            }
+        }
+
+        private static Field shaderPackLoaded() {
+            for(String name : new String[] {"net.optifine.shaders.Shaders", "shadersmod.client.Shaders"}) {
+                try {
+                    return Class.forName(name).getField("shaderPackLoaded");
+                }
+                catch(ReflectiveOperationException | LinkageError ignored) {}
+            }
+            return null;
         }
     }
 }

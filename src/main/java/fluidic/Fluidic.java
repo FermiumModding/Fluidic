@@ -29,7 +29,6 @@ public class Fluidic {
 
 	@Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
-        ModRegistry.init();
         PacketHandler.init();
         Fluidic.PROXY.preInit();
     }

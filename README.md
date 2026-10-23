@@ -73,8 +73,7 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
   sponge touching an ocean or river fills up at once.
 * **Persistence**. Water still moving when the world saves is written to
-  `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks. Settled water blocks
-  of earlier versions (`fluidic:settled_water`) are converted to water blocks as their chunks load.
+  `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks.
 
 ## Commands
 

@@ -77,6 +77,11 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     @Override
     public void randomTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
         if(world.isRemote) return;
+        int level = FluidicWater.level(state);
+        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid();
+        // A full block under more water, the inside of a lake or the sea, neither moves nor dries up. Most random
+        // ticks of the sea land there, they skip looking up whether it is the sea.
+        if(level == Water.LEVELS && waterAbove) return;
         if(FluidicWater.isReservoir(world, pos, state)) {
             // An ocean or river that lost water below sea level fills back up, open sky above it is part of it
             if(pos.getY() + 1 < world.getSeaLevel() && world.isAirBlock(pos.up())) neighborChanged(world, pos, state);
@@ -85,8 +90,6 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         WaterSimulation simulation = SimManager.get(world);
         // Its water already went into the simulation
         if(simulation != null && simulation.isRemoving(pos)) return;
-        int level = FluidicWater.level(state);
-        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid();
         // Only blocks that can be out of balance with their neighbours are rechecked, the inside of a lake is skipped
         if(level < Water.LEVELS || !waterAbove && hasDryNeighbor(world, pos)) neighborChanged(world, pos, state);
 
@@ -95,7 +98,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         // Lakes keep their water, puddles, shallow pools and partly filled surfaces dry up
         if(!canEvaporate(world, simulation, pos, state)) return;
         ForgeConfigHandler.ServerConfig config = ForgeConfigHandler.server;
-        boolean sun = world.isDaytime() && !world.isRaining() && world.canSeeSky(pos.up());
+        boolean sun = world.isDaytime() && !world.isRaining() && FluidicWater.isUnderSky(world, pos.up());
         // The chances are per sixteenth of a block, a level is an eighth. Nothing evaporates in rain or below sea level,
         // soil still soaks it up.
         double chance = world.isRaining() || pos.getY() < world.getSeaLevel() ? 0.0D : config.evaporationChance * (sun ? config.sunEvaporationMultiplier : 1.0D);
@@ -108,6 +111,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         int highest = level;
         for(EnumFacing facing : EnumFacing.HORIZONTALS) {
             BlockPos offset = pos.offset(facing);
+            // Reading an unloaded block would load its chunk
+            if(!world.isBlockLoaded(offset)) continue;
             IBlockState neighbor = world.getBlockState(offset);
             if(!FluidicWater.isWater(neighbor) || FluidicWater.level(neighbor) <= highest) continue;
             if(!canEvaporate(world, simulation, offset, neighbor) || FluidicWater.isReservoir(world, offset, neighbor)) continue;
@@ -115,9 +120,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
             highest = FluidicWater.level(neighbor);
         }
         IBlockState dried = highest == 1 ? Blocks.AIR.getDefaultState() : FluidicWater.state(highest - 1);
-        FluidicWater.placing = true;
-        world.setBlockState(target, dried, 2);
-        FluidicWater.placing = false;
+        FluidicWater.placeQuietly(world, target, dried, 2);
         if(simulation != null) simulation.setTerrain(target, Terrain.classify(dried));
     }
 
@@ -172,9 +175,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
             if(levels.getInt(n) == even) continue;
             BlockPos cell = cells.get(n);
             IBlockState leveled = even == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(even);
-            FluidicWater.placing = true;
-            world.setBlockState(cell, leveled, 2);
-            FluidicWater.placing = false;
+            FluidicWater.placeQuietly(world, cell, leveled, 2);
             if(simulation != null) simulation.setTerrain(cell, Terrain.classify(leveled));
             changed = true;
         }
@@ -186,7 +187,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
      * of a full one. -1 for anything else, oceans and water about to become simulated water included.
      */
     private static int surfaceLevel(World world, WaterSimulation simulation, BlockPos pos) {
-        if(simulation != null && simulation.isRemoving(pos)) return -1;
+        if(!world.isBlockLoaded(pos) || simulation != null && simulation.isRemoving(pos)) return -1;
         IBlockState state = world.getBlockState(pos);
         if(world.getBlockState(pos.up()).getMaterial().isLiquid() || SimulatedWater.height(world, pos.getX(), pos.getY() + 1, pos.getZ()) > 0) return -1;
         if(FluidicWater.isWater(state)) return FluidicWater.isReservoir(world, pos, state) ? -1 : FluidicWater.level(state);
@@ -206,7 +207,10 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     private static boolean hasDryNeighbor(World world, BlockPos pos) {
         for(EnumFacing facing : EnumFacing.HORIZONTALS) {
-            if(!world.getBlockState(pos.offset(facing)).getMaterial().isLiquid() && Terrain.isOpen(world.getBlockState(pos.offset(facing)))) return true;
+            BlockPos offset = pos.offset(facing);
+            if(!world.isBlockLoaded(offset)) continue;
+            IBlockState neighbor = world.getBlockState(offset);
+            if(!neighbor.getMaterial().isLiquid() && Terrain.isOpen(neighbor)) return true;
         }
         return false;
     }

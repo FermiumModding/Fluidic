@@ -36,6 +36,18 @@ public final class FluidicWater {
 
     private FluidicWater() {}
 
+    /** Sets a block with {@link #placing} set, it is put back however setting the block ends */
+    public static void placeQuietly(World world, BlockPos pos, IBlockState state, int flags) {
+        boolean was = placing;
+        placing = true;
+        try {
+            world.setBlockState(pos, state, flags);
+        }
+        finally {
+            placing = was;
+        }
+    }
+
     public static boolean isWater(IBlockState state) {
         return state.getBlock() == Blocks.WATER || state.getBlock() == Blocks.FLOWING_WATER;
     }

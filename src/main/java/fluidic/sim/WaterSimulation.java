@@ -8,6 +8,7 @@ import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -47,7 +48,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -100,6 +100,13 @@ public final class WaterSimulation {
     private final int seaLevel;
     private final int dimension;
     private final ExecutorService executor;
+    /** Writes save files in the background, compressing a large simulation takes a while */
+    private final ExecutorService writer;
+    /** Simulated water promised to buckets and not yet taken out of the published heights, block position to height */
+    private final Long2IntOpenHashMap reserved = new Long2IntOpenHashMap();
+    /** The take each reservation waits for, see #takesPublished */
+    private final Long2LongOpenHashMap reservedFor = new Long2LongOpenHashMap();
+    private long takes;
     private final ConcurrentLinkedQueue<Consumer<WaterSimulation>> commands = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<StepResult> results = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean stepping = new AtomicBoolean();
@@ -118,7 +125,7 @@ public final class WaterSimulation {
 
     private final Long2ObjectOpenHashMap<WaterSection> sections = new Long2ObjectOpenHashMap<>();
     /** Water heights last sent to clients, 255 = full block, for entity physics on the server thread */
-    private final ConcurrentHashMap<Long, byte[]> published = new ConcurrentHashMap<>();
+    private final SectionHeights published = new SectionHeights();
     private final ArrayList<WaterSection> stepList = new ArrayList<>();
     private final Deflater deflater = new Deflater(Deflater.BEST_SPEED);
     private final byte[] deflateBuffer = new byte[4096];
@@ -138,6 +145,10 @@ public final class WaterSimulation {
     private volatile boolean sunny;
     /** Raining or thundering, written by the server thread every tick */
     private volatile boolean raining;
+    /** The last bucket take carried out */
+    private long takesDone;
+    /** The last bucket take whose result is in the published heights, reservations up to it are dropped */
+    private volatile long takesPublished;
 
     // Statistics written by the simulation thread
     private volatile int statSections;
@@ -157,6 +168,11 @@ public final class WaterSimulation {
             thread.setDaemon(true);
             return thread;
         });
+        this.writer = Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "Fluidic Save DIM" + dimension);
+            thread.setDaemon(true);
+            return thread;
+        });
         NBTTagCompound saved = readSaveFile();
         if(saved != null) enqueue(sim -> sim.restore(saved));
     }
@@ -165,9 +181,7 @@ public final class WaterSimulation {
 
     /** Height 0-255 of simulated water at a block as last sent to clients, safe from any thread */
     public int height(int x, int y, int z) {
-        if(y < 0 || y > 255) return 0;
-        byte[] heights = published.get(Water.sectionKey(x >> 4, y >> 4, z >> 4));
-        return heights == null ? 0 : heights[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
+        return published.height(x, y, z);
     }
 
     public void enqueue(Consumer<WaterSimulation> command) {
@@ -184,10 +198,57 @@ public final class WaterSimulation {
         enqueue(sim -> sim.doAddWater(x, y, z, amount, true, true));
     }
 
-    /** Takes simulated water around a cell at its height, like a bucket scooping it up, from the fullest cells first */
+    /**
+     * Height 0-255 of simulated water at a block that buckets can still take, server thread only. Water already
+     * promised to a bucket stays in the published heights until the simulation took it and sent them again.
+     */
+    public int available(int x, int y, int z) {
+        int height = height(x, y, z);
+        if(height == 0 || reserved.isEmpty()) return height;
+        return Math.max(0, height - reserved.get(new BlockPos(x, y, z).toLong()));
+    }
+
+    /**
+     * Takes simulated water around a cell at its height, like a bucket scooping it up, from the fullest cells first.
+     * The same water is reserved right away, so another bucket before the next update cannot take it again.
+     */
     public void takeWater(BlockPos pos, int amount, int reach) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
-        enqueue(sim -> sim.doTakeWater(x, y, z, amount, reach));
+        long take = ++takes;
+        int left = (int)((long)amount * 255 / Water.FULL);
+        int eighth = 255 / Water.LEVELS;
+        while(left > 0) {
+            int bestX = 0, bestZ = 0, best = 0;
+            for(int dx = -reach; dx <= reach; dx++) {
+                for(int dz = -reach; dz <= reach; dz++) {
+                    int height = available(x + dx, y, z + dz);
+                    if(height > best) {
+                        best = height;
+                        bestX = x + dx;
+                        bestZ = z + dz;
+                    }
+                }
+            }
+            if(best == 0) break;
+            int taken = Math.min(left, Math.min(best, eighth));
+            long cell = new BlockPos(bestX, y, bestZ).toLong();
+            reserved.addTo(cell, taken);
+            reservedFor.put(cell, take);
+            left -= taken;
+        }
+        enqueue(sim -> sim.doTakeWater(x, y, z, amount, reach, take));
+    }
+
+    /** Drops reservations the published heights caught up with */
+    private void releaseReservations() {
+        if(reservedFor.isEmpty()) return;
+        long caughtUp = takesPublished;
+        for(ObjectIterator<Long2LongMap.Entry> it = reservedFor.long2LongEntrySet().fastIterator(); it.hasNext(); ) {
+            Long2LongMap.Entry entry = it.next();
+            if(entry.getLongValue() > caughtUp) continue;
+            reserved.remove(entry.getLongKey());
+            it.remove();
+        }
     }
 
     public void setTerrain(BlockPos pos, byte code) {
@@ -224,6 +285,7 @@ public final class WaterSimulation {
         for(StepResult.Payload payload : latePayloads) send(payload);
         latePayloads.clear();
         sendHeldBack();
+        releaseReservations();
 
         StepResult finished;
         while((finished = results.poll()) != null) apply(finished);
@@ -233,13 +295,16 @@ public final class WaterSimulation {
         }
     }
 
+    /**
+     * Saves the water still moving. The world's chunks were written just before, so nothing is changed in the world
+     * now, it would miss them: steps not applied yet are applied on the next tick, and the save counts their settled
+     * water and leaves out the water of woken blocks still in the world. Writing the file happens in the background.
+     */
     public void save() {
-        StepResult finished;
-        while((finished = results.poll()) != null) apply(finished);
-        // Their water is saved with the simulation, the blocks must not be saved too
-        removeWoken();
+        Long2IntOpenHashMap inWorld = wokenWater();
         try {
-            writeSaveFile(executor.submit(this::serialize).get(10, TimeUnit.SECONDS));
+            NBTTagCompound tag = executor.submit(() -> serialize(inWorld)).get(10, TimeUnit.SECONDS);
+            writer.execute(() -> writeSaveFile(tag));
         }
         catch(Exception ex) {
             Fluidic.LOGGER.error("Failed to save water simulation of dimension " + dimension, ex);
@@ -249,21 +314,31 @@ public final class WaterSimulation {
     /** Stops the simulation thread and saves everything, including settled water that never got placed */
     public void shutdown() {
         executor.shutdown();
+        writer.shutdown();
         try {
             if(!executor.awaitTermination(10, TimeUnit.SECONDS)) {
                 Fluidic.LOGGER.warn("Water simulation of dimension " + dimension + " did not stop in time");
                 return;
             }
-            Consumer<WaterSimulation> command;
-            while((command = commands.poll()) != null) command.accept(this);
-            StepResult unapplied;
-            while((unapplied = results.poll()) != null) unsettle(unapplied);
-            unsettle(result);
-            writeSaveFile(serialize());
+            // An earlier save still being written must not land after this one
+            writer.awaitTermination(10, TimeUnit.SECONDS);
+            writeSaveFile(serialize(wokenWater()));
         }
         catch(InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** Water of woken blocks not removed yet, by block position. They are still in the world and its saved chunks. */
+    private Long2IntOpenHashMap wokenWater() {
+        Long2IntOpenHashMap water = new Long2IntOpenHashMap();
+        for(int n = 0; n < removals.size(); n++) {
+            BlockPos pos = BlockPos.fromLong(removals.getLong(n));
+            if(!world.isBlockLoaded(pos)) continue;
+            IBlockState state = world.getBlockState(pos);
+            if(FluidicWater.isWater(state)) water.put(removals.getLong(n), FluidicWater.level(state) * Water.UNIT);
+        }
+        return water;
     }
 
     private void apply(StepResult step) {
@@ -405,9 +480,7 @@ public final class WaterSimulation {
 
     /** Places a block for the simulation, water placed here is not reported back to it */
     private void place(BlockPos pos, IBlockState state, int flags) {
-        FluidicWater.placing = true;
-        world.setBlockState(pos, state, flags);
-        FluidicWater.placing = false;
+        FluidicWater.placeQuietly(world, pos, state, flags);
     }
 
     private void send(StepResult.Payload payload) {
@@ -666,6 +739,8 @@ public final class WaterSimulation {
             if(!sections.containsKey(key)) createPending(key);
         }
         poolMissing.clear();
+        // Every section a take changed was sent above
+        if(flushNet) takesPublished = takesDone;
 
         statSections = sections.size();
         statActive = stepList.size();
@@ -920,20 +995,6 @@ public final class WaterSimulation {
         return 0;
     }
 
-    /** Puts settled water that was never placed back into the grid so it gets saved */
-    private void unsettle(StepResult step) {
-        for(int n = 0; n < step.settles.size(); n++) {
-            BlockPos pos = BlockPos.fromLong(step.settles.getLong(n));
-            WaterSection section = sections.get(Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4));
-            if(section == null) continue;
-            int i = Water.cellIndex(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
-            if(section.terrain != null) section.terrain[i] = WaterSection.OPEN;
-            section.addMass(i, step.settleLevels.getInt(n) * Water.UNIT);
-        }
-        step.settles.clear();
-        step.settleLevels.clear();
-    }
-
     private void flushNet(WaterSection section, boolean afterBlocks) {
         section.dirtyNet = false;
         byte[] heights = null;
@@ -1019,8 +1080,12 @@ public final class WaterSimulation {
             section.defer(() -> doAddWater(x, y, z, amount, allowUp, rain));
             return;
         }
-        if(section.state == WaterSection.STATE_FROZEN) return;
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        // Its chunk is not loaded, the water waits there and moves on once the chunk loads again
+        if(section.state == WaterSection.STATE_FROZEN) {
+            section.addMass(i, amount);
+            return;
+        }
         if(WaterSection.holds(section.terrain[i])) {
             if(rain && section.mass[i] > 0 && !section.dormant) {
                 section.bankRain(i, amount);
@@ -1036,7 +1101,8 @@ public final class WaterSimulation {
         }
     }
 
-    private void doTakeWater(int x, int y, int z, int amount, int reach) {
+    private void doTakeWater(int x, int y, int z, int amount, int reach, long take) {
+        takesDone = take;
         List<long[]> cells = new ArrayList<>();
         for(int dx = -reach; dx <= reach; dx++) {
             for(int dz = -reach; dz <= reach; dz++) {
@@ -1246,24 +1312,34 @@ public final class WaterSimulation {
 
     // ---------------------------------------------------------------- persistence
 
-    private NBTTagCompound serialize() {
+    /**
+     * The water to save, on the simulation thread or after it stopped. Settled water of steps the server has not
+     * applied yet is not in the world, it is saved as simulated water. Woken blocks still in the world, given by
+     * position, hold their water there, it is left out.
+     */
+    private NBTTagCompound serialize(Long2IntOpenHashMap inWorld) {
+        // Water poured, rained or woken that has not reached the grid yet
+        Consumer<WaterSimulation> command;
+        while((command = commands.poll()) != null) command.accept(this);
+        for(WaterSection section : sections.values()) section.releaseRain();
+
+        Long2ObjectOpenHashMap<int[]> adjusted = new Long2ObjectOpenHashMap<>();
+        for(StepResult step : results) {
+            for(int n = 0; n < step.settles.size(); n++) {
+                BlockPos pos = BlockPos.fromLong(step.settles.getLong(n));
+                if(pos.getY() < 0 || pos.getY() > 255) continue;
+                adjustedMass(adjusted, Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4))
+                        [Water.cellIndex(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15)] += step.settleLevels.getInt(n) * Water.UNIT;
+            }
+        }
+        for(Long2IntMap.Entry entry : inWorld.long2IntEntrySet()) takeBack(adjusted, BlockPos.fromLong(entry.getLongKey()), entry.getIntValue());
+
         NBTTagList list = new NBTTagList();
         for(WaterSection section : sections.values()) {
-            section.releaseRain();
-            if(section.filled == 0) continue;
-            int[] cells = new int[section.filled * 2];
-            int n = 0;
-            for(int i = 0; i < 4096 && n < cells.length; i++) {
-                if(section.mass[i] > 0) {
-                    cells[n++] = i;
-                    cells[n++] = section.mass[i];
-                }
-            }
-            NBTTagCompound tag = new NBTTagCompound();
-            tag.setLong("key", section.key);
-            tag.setIntArray("cells", cells);
-            list.appendTag(tag);
+            int[] mass = adjusted.remove(section.key);
+            appendCells(list, section.key, mass == null ? section.mass : mass);
         }
+        for(Long2ObjectMap.Entry<int[]> entry : adjusted.long2ObjectEntrySet()) appendCells(list, entry.getLongKey(), entry.getValue());
         NBTTagList soaked = new NBTTagList();
         for(Long2IntMap.Entry entry : sponges.long2IntEntrySet()) {
             NBTTagCompound tag = new NBTTagCompound();
@@ -1276,6 +1352,52 @@ public final class WaterSimulation {
         root.setTag("sections", list);
         root.setTag("sponges", soaked);
         return root;
+    }
+
+    private static void appendCells(NBTTagList list, long key, int[] mass) {
+        int filled = 0;
+        for(int m : mass) if(m > 0) filled++;
+        if(filled == 0) return;
+        int[] cells = new int[filled * 2];
+        int n = 0;
+        for(int i = 0; i < 4096; i++) {
+            if(mass[i] > 0) {
+                cells[n++] = i;
+                cells[n++] = mass[i];
+            }
+        }
+        NBTTagCompound tag = new NBTTagCompound();
+        tag.setLong("key", key);
+        tag.setIntArray("cells", cells);
+        list.appendTag(tag);
+    }
+
+    /** A copy of a section's masses to change for saving, the simulation's own stay as they are */
+    private int[] adjustedMass(Long2ObjectOpenHashMap<int[]> adjusted, long key) {
+        int[] mass = adjusted.get(key);
+        if(mass == null) {
+            WaterSection section = sections.get(key);
+            mass = section == null ? new int[4096] : section.mass.clone();
+            adjusted.put(key, mass);
+        }
+        return mass;
+    }
+
+    /** Leaves water out of the save at a block, and around it for what already flowed off */
+    private void takeBack(Long2ObjectOpenHashMap<int[]> adjusted, BlockPos pos, int amount) {
+        for(int dir = -1; dir < 6 && amount > 0; dir++) {
+            int x = pos.getX() + (dir < 0 ? 0 : Water.DX[dir]);
+            int y = pos.getY() + (dir < 0 ? 0 : Water.DY[dir]);
+            int z = pos.getZ() + (dir < 0 ? 0 : Water.DZ[dir]);
+            if(y < 0 || y > 255) continue;
+            long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
+            if(!sections.containsKey(key) && !adjusted.containsKey(key)) continue;
+            int[] mass = adjustedMass(adjusted, key);
+            int i = Water.cellIndex(x & 15, y & 15, z & 15);
+            int taken = Math.min(amount, mass[i]);
+            mass[i] -= taken;
+            amount -= taken;
+        }
     }
 
     private void restore(NBTTagCompound root) {

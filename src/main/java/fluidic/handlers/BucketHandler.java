@@ -76,9 +76,7 @@ public class BucketHandler {
                 if(taken[n] == levels[n]) continue;
                 BlockPos cell = surface.get(n);
                 IBlockState lowered = taken[n] == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(taken[n]);
-                FluidicWater.placing = true;
-                world.setBlockState(cell, lowered, 3);
-                FluidicWater.placing = false;
+                FluidicWater.placeQuietly(world, cell, lowered, 3);
                 if(simulation != null) simulation.setTerrain(cell, Terrain.classify(world, cell, lowered));
             }
         }
@@ -93,20 +91,23 @@ public class BucketHandler {
      * last sent to players, which is what both sides know.
      */
     private static void scoopSimulated(FillBucketEvent event, World world, EntityPlayer player, BlockPos pos) {
-        if(SimulatedWater.height(world, pos.getX(), pos.getY(), pos.getZ()) == 0) return;
+        // The server leaves out water already promised to another bucket and not taken yet
+        WaterSimulation simulation = SimManager.get(world);
+        if(!world.isRemote && simulation == null) return;
+        if(scoopable(world, simulation, pos.getX(), pos.getY(), pos.getZ()) == 0) return;
         int total = 0;
         for(int dx = -REACH; dx <= REACH; dx++) {
-            for(int dz = -REACH; dz <= REACH; dz++) total += SimulatedWater.height(world, pos.getX() + dx, pos.getY(), pos.getZ() + dz);
+            for(int dz = -REACH; dz <= REACH; dz++) total += scoopable(world, simulation, pos.getX() + dx, pos.getY(), pos.getZ() + dz);
         }
         if(total < 255) return;
-        if(!world.isRemote) {
-            WaterSimulation simulation = SimManager.get(world);
-            if(simulation == null) return;
-            simulation.takeWater(pos, Water.FULL, REACH);
-        }
+        if(simulation != null) simulation.takeWater(pos, Water.FULL, REACH);
         player.playSound(SoundEvents.ITEM_BUCKET_FILL, 1.0F, 1.0F);
         event.setFilledBucket(new ItemStack(Items.WATER_BUCKET));
         event.setResult(Event.Result.ALLOW);
+    }
+
+    private static int scoopable(World world, WaterSimulation simulation, int x, int y, int z) {
+        return simulation != null ? simulation.available(x, y, z) : SimulatedWater.height(world, x, y, z);
     }
 
     /** Water blocks of the surface the aimed at block belongs to, connected at its height, the aimed at one first */

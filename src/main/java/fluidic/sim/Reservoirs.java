@@ -1,13 +1,16 @@
 package fluidic.sim;
 
 import fluidic.block.FluidicWater;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 
@@ -40,27 +43,24 @@ public final class Reservoirs {
     private static final long REMEMBER_TICKS = 2400L;
     /** Ticks a no is remembered when the search ran into unloaded chunks */
     private static final long RECHECK_TICKS = 200L;
-    /** Answers remembered at most, forgotten all at once past this */
+    /** Answers remembered at most, past this old ones are forgotten, all of them if that is not enough */
     private static final int MAX_REMEMBERED = 1 << 20;
+    /** Chunks around a changed block whose answers are looked up again, damming a river can change them */
+    private static final int CHANGE_RADIUS = 2;
 
     /** No block position. Packed positions west of x 0 are negative, so -1 cannot stand for none */
     private static final long NONE = Long.MIN_VALUE;
     private static final EnumFacing[] FACINGS = EnumFacing.values();
-    /** Block position to the tick of the answer << 1 | whether it is an ocean or river, per world */
-    private static final Map<World, Long2LongOpenHashMap> REMEMBERED = new WeakHashMap<>();
+    private static final Map<World, Memory> REMEMBERED = new WeakHashMap<>();
 
     private Reservoirs() {}
 
     /** Whether the water block at a position, full and below sea level, belongs to an ocean or river */
     public static boolean isReservoir(World world, BlockPos pos) {
-        Long2LongOpenHashMap remembered = REMEMBERED.computeIfAbsent(world, w -> {
-            Long2LongOpenHashMap map = new Long2LongOpenHashMap();
-            map.defaultReturnValue(-1L);
-            return map;
-        });
+        Memory remembered = REMEMBERED.computeIfAbsent(world, w -> new Memory());
         long now = world.getTotalWorldTime();
-        long known = remembered.get(pos.toLong());
-        if(isFresh(known, now)) return (known & 1L) != 0;
+        long known = remembered.known(pos.toLong(), now);
+        if(known >= 0L) return (known & 1L) != 0;
         return new Search(world, remembered, now).run(pos);
     }
 
@@ -69,12 +69,9 @@ public final class Reservoirs {
      * remembering the answer.
      */
     public static String describe(World world, BlockPos pos) {
-        Long2LongOpenHashMap remembered = REMEMBERED.get(world);
-        long known = remembered == null ? -1L : remembered.get(pos.toLong());
-        String cached = isFresh(known, world.getTotalWorldTime()) ? ((known & 1L) != 0 ? "yes" : "no") : "not looked up";
-        Long2LongOpenHashMap scratch = new Long2LongOpenHashMap();
-        scratch.defaultReturnValue(-1L);
-        Search search = new Search(world, scratch, world.getTotalWorldTime());
+        Memory remembered = REMEMBERED.get(world);
+        long known = remembered == null ? -1L : remembered.known(pos.toLong(), world.getTotalWorldTime());
+        String cached = known >= 0L ? ((known & 1L) != 0 ? "yes" : "no") : "not looked up";        Search search = new Search(world, new Memory(), world.getTotalWorldTime());
         boolean reservoir = search.search(pos);
         String surface = search.surfaceFound == NONE ? "none" : "y" + BlockPos.fromLong(search.surfaceFound).getY();
         BlockPos top = pos;
@@ -88,8 +85,9 @@ public final class Reservoirs {
 
     /**
      * A block took the place of water below sea level, or water of a block. That may dam off part of the sea or
-     * join a pool to it, so everything is looked up again. The simulation turning water into air and back does
-     * not count, it does that all the time.
+     * join a pool to it, so answers around it are looked up again. Further away they are only looked up again once
+     * they are old, clearing every answer of the world for each block placed in the sea would search it all over.
+     * The simulation turning water into air and back does not count, it does that all the time.
      */
     public static void blockChanged(World world, BlockPos pos, IBlockState oldState, IBlockState newState) {
         if(pos.getY() >= world.getSeaLevel()) return;
@@ -97,23 +95,66 @@ public final class Reservoirs {
         if(wasWater == isWater) return;
         IBlockState other = wasWater ? newState : oldState;
         if(other.getMaterial() == Material.AIR) return;
-        Long2LongOpenHashMap remembered = REMEMBERED.get(world);
-        if(remembered != null) remembered.clear();
+        Memory remembered = REMEMBERED.get(world);
+        if(remembered != null) remembered.changed(pos.getX() >> 4, pos.getZ() >> 4, world.getTotalWorldTime());
     }
 
-    private static boolean isFresh(long known, long now) {
-        return known >= 0L && now - (known >> 1) < REMEMBER_TICKS;
-    }
+    /**
+     * Answers per world: block position to the tick of the answer << 1 | whether it is an ocean or river, and the
+     * ticks blocks last changed around chunks, answers from before that are stale.
+     */
+    private static final class Memory {
 
-    /** Only a yes is taken over from earlier searches, a no may come from one cut short by unloaded chunks */
-    private static boolean isKnownReservoir(long known, long now) {
-        return isFresh(known, now) && (known & 1L) != 0;
+        private final Long2LongOpenHashMap answers = new Long2LongOpenHashMap();
+        private final Long2LongOpenHashMap changes = new Long2LongOpenHashMap();
+
+        Memory() {
+            answers.defaultReturnValue(-1L);
+            changes.defaultReturnValue(Long.MIN_VALUE);
+        }
+
+        /** The answer remembered for a block position, -1 when there is none or it is stale */
+        long known(long pos, long now) {
+            long known = answers.get(pos);
+            if(known < 0L) return -1L;
+            long tick = known >> 1;
+            if(now - tick >= REMEMBER_TICKS) return -1L;
+            // Packed block positions keep x in the top 26 bits and z in the bottom 26
+            int cx = (int)(pos >> 38) >> 4, cz = (int)(pos << 38 >> 38) >> 4;
+            return tick <= changes.get(ChunkPos.asLong(cx, cz)) ? -1L : known;
+        }
+
+        /** Only a yes is taken over from earlier searches, a no may come from one cut short by unloaded chunks */
+        boolean isKnownReservoir(long pos, long now) {
+            long known = known(pos, now);
+            return known >= 0L && (known & 1L) != 0;
+        }
+
+        void remember(LongArrayList positions, long value, long now) {
+            if(answers.size() + positions.size() > MAX_REMEMBERED) forgetOld(answers, 1, now);
+            if(answers.size() + positions.size() > MAX_REMEMBERED) answers.clear();
+            for(int n = 0; n < positions.size(); n++) answers.put(positions.getLong(n), value);
+        }
+
+        void changed(int cx, int cz, long now) {
+            if(changes.size() > 4096) forgetOld(changes, 0, now);
+            for(int dx = -CHANGE_RADIUS; dx <= CHANGE_RADIUS; dx++) {
+                for(int dz = -CHANGE_RADIUS; dz <= CHANGE_RADIUS; dz++) changes.put(ChunkPos.asLong(cx + dx, cz + dz), now);
+            }
+        }
+
+        /** Drops entries too old to matter, their values hold the tick shifted left by the given bits */
+        private static void forgetOld(Long2LongOpenHashMap map, int shift, long now) {
+            for(ObjectIterator<Long2LongMap.Entry> it = map.long2LongEntrySet().fastIterator(); it.hasNext(); ) {
+                if(now - (it.next().getLongValue() >> shift) >= REMEMBER_TICKS) it.remove();
+            }
+        }
     }
 
     private static final class Search {
 
         private final World world;
-        private final Long2LongOpenHashMap remembered;
+        private final Memory remembered;
         private final long now;
         private final int surfaceY;
         /** Every block looked at, they all share the answer */
@@ -127,7 +168,7 @@ public final class Reservoirs {
         private int columnsSearched;
         private boolean biomeFound;
 
-        Search(World world, Long2LongOpenHashMap remembered, long now) {
+        Search(World world, Memory remembered, long now) {
             this.world = world;
             this.remembered = remembered;
             this.now = now;
@@ -136,11 +177,9 @@ public final class Reservoirs {
 
         boolean run(BlockPos pos) {
             boolean reservoir = search(pos);
-            if(remembered.size() > MAX_REMEMBERED) remembered.clear();
             // Not knowing what lies in unloaded chunks, a no is only kept a little while
             long stamp = !reservoir && cutShort ? now - REMEMBER_TICKS + RECHECK_TICKS : now;
-            long value = (stamp << 1) | (reservoir ? 1L : 0L);
-            for(int n = 0; n < seen.size(); n++) remembered.put(seen.getLong(n), value);
+            remembered.remember(seen, (stamp << 1) | (reservoir ? 1L : 0L), now);
             return reservoir;
         }
 
@@ -151,7 +190,7 @@ public final class Reservoirs {
             int top = pos.getY();
             while(top < surfaceY) {
                 cell.setPos(pos.getX(), top + 1, pos.getZ());
-                if(isKnownReservoir(remembered.get(cell.toLong()), now)) return true;
+                if(remembered.isKnownReservoir(cell.toLong(), now)) return true;
                 if(!FluidicWater.isWater(world.getBlockState(cell))) break;
                 visit(cell.toLong());
                 top++;
@@ -206,7 +245,7 @@ public final class Reservoirs {
             boolean biome = false;
             for(int n = 0; n < queue.size(); n++) {
                 long packed = queue.getLong(n);
-                if(isKnownReservoir(remembered.get(packed), now)) return true;
+                if(remembered.isKnownReservoir(packed, now)) return true;
                 BlockPos at = BlockPos.fromLong(packed);
                 if(!biome && FluidicWater.isReservoirBiome(world.getBiome(at))) biome = true;
                 columnsSearched = queue.size();

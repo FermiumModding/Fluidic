@@ -43,6 +43,15 @@ public final class ChunkRedraws {
         return true;
     }
 
+    /** Forgets the sections of a chunk the client dropped */
+    static void unloadChunk(int cx, int cz) {
+        for(int sy = 0; sy < 16; sy++) {
+            long key = Water.sectionKey(cx, sy, cz);
+            CHANGED.remove(key);
+            DRAWN.remove(key);
+        }
+    }
+
     static void clear() {
         CHANGED.clear();
         DRAWN.clear();

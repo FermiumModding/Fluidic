@@ -111,6 +111,8 @@ public class ServerEventHandler {
             int count = 0;
             for(int k = 0; k < 5; k++) {
                 BlockPos target = k == 0 ? below : below.offset(EnumFacing.HORIZONTALS[k - 1]);
+                // Reading an unloaded block would load its chunk
+                if(!world.isBlockLoaded(target)) continue;
                 IBlockState state = k == 0 ? belowState : world.getBlockState(target);
                 if(!canRaise(world, simulation, target, state, k == 0)) continue;
                 targets[count] = target;
@@ -127,9 +129,7 @@ public class ServerEventHandler {
             for(int k = 0; k < count; k++) {
                 if(raised[k] == levels[k]) continue;
                 IBlockState state = FluidicWater.state(raised[k]);
-                FluidicWater.placing = true;
-                world.setBlockState(targets[k], state, 2);
-                FluidicWater.placing = false;
+                FluidicWater.placeQuietly(world, targets[k], state, 2);
                 simulation.setTerrain(targets[k], Terrain.classify(state));
             }
             if(amount <= 0) return;

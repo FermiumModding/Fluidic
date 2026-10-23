@@ -18,6 +18,7 @@ import net.minecraft.client.renderer.GLAllocation;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.WorldVertexBufferUploader;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
@@ -142,6 +143,9 @@ public final class WaterRenderer {
         double camZ = view.lastTickPosZ + (view.posZ - view.lastTickPosZ) * partialTicks;
         int distance = Math.min(ForgeConfigHandler.client.renderDistance, mc.gameSettings.renderDistanceChunks) * 16 + 8;
         double maxDistanceSq = (double)distance * distance;
+        // Sections out of view are skipped, the view is the one the chunks were just drawn with
+        Frustum frustum = new Frustum();
+        frustum.setPosition(camX, camY, camZ);
 
         GlStateManager.pushMatrix();
         mc.entityRenderer.enableLightmap();
@@ -163,6 +167,8 @@ public final class WaterRenderer {
             double oz = Water.keyZ(key) * 16 - camZ;
             double dx = ox + 8, dz = oz + 8;
             if(dx * dx + dz * dz > maxDistanceSq) continue;
+            int bx = Water.keyX(key) * 16, by = Water.keyY(key) * 16, bz = Water.keyZ(key) * 16;
+            if(!frustum.isBoxInFrustum(bx, by, bz, bx + 16, by + 16, bz + 16)) continue;
             GlStateManager.pushMatrix();
             GlStateManager.translate(ox, oy, oz);
             GlStateManager.callList(entry.getIntValue());
@@ -212,11 +218,24 @@ public final class WaterRenderer {
         if(heights != null) {
             int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
             BUFFER.begin(GL11.GL_QUADS, DefaultVertexFormats.BLOCK);
-            for(int i = 0; i < 4096; i++) {
-                if(heights[i] == 0) continue;
-                any |= buildCell(world, ox, oy, oz, i & 15, i >> 8, (i >> 4) & 15);
+            RuntimeException failed = null;
+            try {
+                for(int i = 0; i < 4096; i++) {
+                    if(heights[i] == 0) continue;
+                    any |= buildCell(world, ox, oy, oz, i & 15, i >> 8, (i >> 4) & 15);
+                }
             }
-            BUFFER.finishDrawing();
+            catch(RuntimeException ex) {
+                failed = ex;
+            }
+            finally {
+                // Left building, every later rebuild would fail
+                BUFFER.finishDrawing();
+            }
+            if(failed != null) {
+                Fluidic.LOGGER.error("Failed to build simulated water mesh of a section", failed);
+                any = false;
+            }
         }
 
         int list = DISPLAY_LISTS.get(key);

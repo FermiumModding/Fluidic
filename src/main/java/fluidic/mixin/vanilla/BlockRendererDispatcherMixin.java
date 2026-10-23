@@ -35,12 +35,12 @@ public abstract class BlockRendererDispatcherMixin {
             return;
         }
         // Shader packs tell water by the block its vertices are tagged with, OptiFine tagged them with the block here
-        ChunkWater.tagAs(water, pos, world, buffer);
+        boolean tagged = ChunkWater.tagAs(water, pos, world, buffer);
         try {
             cir.setReturnValue(fluidRenderer.renderFluid(world, water, pos, buffer));
         }
         finally {
-            ChunkWater.untag(buffer);
+            if(tagged) ChunkWater.untag(buffer);
         }
     }
 }
