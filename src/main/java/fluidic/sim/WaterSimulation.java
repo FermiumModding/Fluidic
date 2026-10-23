@@ -8,6 +8,8 @@ import fluidic.network.MessageWaterSection;
 import fluidic.network.PacketHandler;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -25,6 +27,7 @@ import net.minecraft.nbt.CompressedStreamTools;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.event.ForgeEventFactory;
@@ -38,7 +41,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -81,6 +87,10 @@ public final class WaterSimulation {
      * surface that can run on for many chunks, so after this it levels the part that is known instead.
      */
     private static final int MAX_LEVEL_WAITS = 2;
+    /** Most ticks an update of a distant section is held back for a player */
+    private static final int MAX_UPDATE_DELAY = 10;
+    /** Stands for an update of a section that has no water left, a held back update cannot be null */
+    private static final byte[] NO_WATER = new byte[0];
     private static final String SAVE_FILE = "fluidic_water.dat";
 
     // ---------------------------------------------------------------- server thread state
@@ -94,6 +104,9 @@ public final class WaterSimulation {
     private final ConcurrentLinkedQueue<StepResult> results = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean stepping = new AtomicBoolean();
     private final List<StepResult.Payload> latePayloads = new ArrayList<>();
+    /** Updates of distant sections held back per player, sent at their time, see #updateDelay */
+    private final Map<UUID, Long2ObjectOpenHashMap<byte[]>> heldBack = new HashMap<>();
+    private final Map<UUID, Long2LongOpenHashMap> heldUntil = new HashMap<>();
     /**
      * Woken blocks, removed one step after their water went into the simulation so clients get the simulated water
      * before the block disappears. Otherwise the pool shows a hole down to its floor for a moment.
@@ -210,6 +223,7 @@ public final class WaterSimulation {
         raining = world.isRaining();
         for(StepResult.Payload payload : latePayloads) send(payload);
         latePayloads.clear();
+        sendHeldBack();
 
         StepResult finished;
         while((finished = results.poll()) != null) apply(finished);
@@ -400,14 +414,73 @@ public final class WaterSimulation {
         MessageWaterSection message = new MessageWaterSection(dimension, payload.key, payload.data);
         if(payload.target != null) {
             EntityPlayerMP player = world.getMinecraftServer().getPlayerList().getPlayerByUUID(payload.target);
-            if(player != null && player.world == world) PacketHandler.INSTANCE.sendTo(message, player);
+            if(player == null || player.world != world) return;
+            // The whole section, an update still held back for the player is older
+            dropHeldBack(player, payload.key);
+            PacketHandler.INSTANCE.sendTo(message, player);
             return;
         }
         int cx = Water.keyX(payload.key);
         int cz = Water.keyZ(payload.key);
+        long now = world.getTotalWorldTime();
         for(EntityPlayer player : world.playerEntities) {
-            if(player instanceof EntityPlayerMP && world.getPlayerChunkMap().isPlayerWatchingChunk((EntityPlayerMP)player, cx, cz)) {
+            if(!(player instanceof EntityPlayerMP) || !world.getPlayerChunkMap().isPlayerWatchingChunk((EntityPlayerMP)player, cx, cz)) continue;
+            int delay = updateDelay(player, cx, cz);
+            if(delay == 0) {
+                dropHeldBack(player, payload.key);
                 PacketHandler.INSTANCE.sendTo(message, (EntityPlayerMP)player);
+                continue;
+            }
+            // Each update holds the whole section, a newer one replaces the one held back but keeps its time
+            Long2ObjectOpenHashMap<byte[]> held = heldBack.computeIfAbsent(player.getUniqueID(), id -> new Long2ObjectOpenHashMap<>());
+            if(held.put(payload.key, payload.data == null ? NO_WATER : payload.data) == null) {
+                heldUntil.computeIfAbsent(player.getUniqueID(), id -> new Long2LongOpenHashMap()).put(payload.key, now + delay);
+            }
+        }
+    }
+
+    /**
+     * Ticks an update of a section is held back for a player. Water far away needs no smooth movement, sending it
+     * less often saves the network and the client redrawing it.
+     */
+    private static int updateDelay(EntityPlayer player, int cx, int cz) {
+        int distance = Math.max(Math.abs((MathHelper.floor(player.posX) >> 4) - cx), Math.abs((MathHelper.floor(player.posZ) >> 4) - cz));
+        int near = ForgeConfigHandler.server.fullRateDistance;
+        return distance <= near ? 0 : Math.min(MAX_UPDATE_DELAY, (distance - near) * 2);
+    }
+
+    private void dropHeldBack(EntityPlayer player, long key) {
+        Long2ObjectOpenHashMap<byte[]> held = heldBack.get(player.getUniqueID());
+        if(held == null) return;
+        held.remove(key);
+        Long2LongOpenHashMap until = heldUntil.get(player.getUniqueID());
+        if(until != null) until.remove(key);
+    }
+
+    /** Sends the updates held back for players whose time has come */
+    private void sendHeldBack() {
+        if(heldBack.isEmpty()) return;
+        long now = world.getTotalWorldTime();
+        Iterator<Map.Entry<UUID, Long2ObjectOpenHashMap<byte[]>>> players = heldBack.entrySet().iterator();
+        while(players.hasNext()) {
+            Map.Entry<UUID, Long2ObjectOpenHashMap<byte[]>> entry = players.next();
+            EntityPlayerMP player = world.getMinecraftServer().getPlayerList().getPlayerByUUID(entry.getKey());
+            Long2LongOpenHashMap until = heldUntil.get(entry.getKey());
+            if(player == null || player.world != world || until == null) {
+                players.remove();
+                heldUntil.remove(entry.getKey());
+                continue;
+            }
+            for(ObjectIterator<Long2ObjectMap.Entry<byte[]>> it = entry.getValue().long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
+                Long2ObjectMap.Entry<byte[]> held = it.next();
+                long key = held.getLongKey();
+                if(until.get(key) > now) continue;
+                byte[] data = held.getValue();
+                it.remove();
+                until.remove(key);
+                // A chunk the player stopped watching was dropped by the client already
+                if(!world.getPlayerChunkMap().isPlayerWatchingChunk(player, Water.keyX(key), Water.keyZ(key))) continue;
+                PacketHandler.INSTANCE.sendTo(new MessageWaterSection(dimension, key, data == NO_WATER ? null : data), player);
             }
         }
     }

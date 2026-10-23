@@ -49,6 +49,13 @@ public class ForgeConfigHandler {
 		@Config.RangeInt(min = 1, max = 20)
 		public int networkInterval = 2;
 
+		@Config.Comment({
+				"Chunks from a player water updates are sent to them at full rate. Further out they are sent less often, up to",
+				"half a second apart at the edge of view, which saves the network and the client redrawing them."})
+		@Config.Name("Full Rate Update Distance")
+		@Config.RangeInt(min = 0, max = 32)
+		public int fullRateDistance = 4;
+
 		@Config.Comment("Rain adds water to the simulation.")
 		@Config.Name("Enable Rain Accumulation")
 		public boolean enableRain = true;
