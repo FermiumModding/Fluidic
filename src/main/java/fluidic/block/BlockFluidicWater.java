@@ -55,13 +55,14 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     @Override
     public void onBlockAdded(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        // Water placed by anything but the simulation, like a bucket or melting ice, may have to flow
-        if(!FluidicWater.placing) neighborChanged(world, pos, state);
+        // Water placed by anything but the simulation, like a bucket or melting ice, may have to flow. Not water placed by
+        // world generation, see FluidicWater.generating.
+        if(!FluidicWater.placing && FluidicWater.generating == 0) neighborChanged(world, pos, state);
     }
 
     @Override
     public void neighborChanged(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Block block, @Nonnull BlockPos fromPos) {
-        neighborChanged(world, pos, state);
+        if(FluidicWater.generating == 0) neighborChanged(world, pos, state);
     }
 
     static void neighborChanged(World world, BlockPos pos, IBlockState state) {
@@ -270,6 +271,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         boolean simulated = FluidicWater.simHeight(offset) > 0;
         // Simulated water is drawn by the client renderer, its top and bottom meet this water without a face
         if(simulated && side.getAxis() == EnumFacing.Axis.Y) return false;
+        // Full water under an opaque block reaches up to it, its top would only flicker against the block's bottom
+        if(side == EnumFacing.UP && FluidicWater.underCeiling(world, pos) && FluidicWater.renderHeight(world, pos) >= 1.0F) return false;
         // Water surfaces meet at shared corners, so no face is drawn between them, except where this water continues
         // up and stands above the water beside it. Rain settling on a full pool makes the block under it full height,
         // and the step down to the pool around it would show a gap.

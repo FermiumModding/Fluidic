@@ -13,8 +13,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
-import net.minecraft.world.biome.Biome;
-import net.minecraftforge.common.BiomeDictionary;
 
 /**
  * Vanilla water blocks replaced by Fluidic. Levels follow vanilla, so other code reading water keeps working:
@@ -25,6 +23,13 @@ public final class FluidicWater {
 
     /** Set while the simulation places water itself, so the placement is not reported back to it */
     public static boolean placing;
+
+    /**
+     * Chunks being populated, nested when populating one generates another. Server thread only. Water placed by world
+     * generation is left as generated: checking every block of a lake as it is placed costs more than generating it,
+     * and the half finished lake would start flowing. Water near players gets checked by its random ticks anyway.
+     */
+    public static int generating;
 
     /** Set by the client while chunks draw simulated water as water blocks, see fluidic.client.ChunkWater */
     public static volatile boolean simulatedInChunks;
@@ -80,11 +85,6 @@ public final class FluidicWater {
         return world.getLightFor(EnumSkyBlock.SKY, pos) >= 14;
     }
 
-    public static boolean isReservoirBiome(Biome biome) {
-        return BiomeDictionary.hasType(biome, BiomeDictionary.Type.OCEAN) || BiomeDictionary.hasType(biome, BiomeDictionary.Type.RIVER)
-                || BiomeDictionary.hasType(biome, BiomeDictionary.Type.BEACH);
-    }
-
     /**
      * A puddle of half a block or less on the ground is too shallow to swim in or push entities. The same
      * level on top of deeper water is just the surface of a pool and counts as water.
@@ -126,7 +126,7 @@ public final class FluidicWater {
         boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) > 0;
         if(!state.getMaterial().isLiquid()) {
             int sim = simHeight(pos);
-            if(sim > 0) return waterAbove ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
+            if(sim > 0) return waterAbove || sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
             return state.getMaterial().isSolid() ? -1.0F : 0.0F;
         }
         if(waterAbove) return 1.0F;
@@ -134,10 +134,20 @@ public final class FluidicWater {
         // so it rises and falls smoothly. Its chunk redraws whenever it changes.
         if(simulatedInChunks) {
             int sim = simHeight(pos);
-            if(sim > 0) return sim / 255.0F * Water.RENDER_HEIGHT;
+            if(sim > 0) return sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
         }
+        if(isWater(state) && level(state) == Water.LEVELS && underCeiling(world, pos)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return Water.RENDER_HEIGHT;
+    }
+
+    /**
+     * Whether full water in a block reaches up to the block above it: an opaque block, its bottom face is the water's
+     * ceiling. Drawn at the usual surface height, a full block under it would show a gap of air below it, like an air
+     * bubble under a block in the middle of the sea.
+     */
+    public static boolean underCeiling(IBlockAccess world, BlockPos pos) {
+        return pos.getY() < 255 && world.getBlockState(pos.up()).isOpaqueCube();
     }
 
     /**

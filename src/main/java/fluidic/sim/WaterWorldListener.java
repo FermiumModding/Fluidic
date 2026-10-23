@@ -29,6 +29,9 @@ final class WaterWorldListener implements IWorldEventListener {
         if(oldState == newState) return;
         Reservoirs.blockChanged(world, pos, oldState, newState);
         if(FluidicWater.isWater(oldState) || FluidicWater.isWater(newState)) LilyPads.waterChanged(world, pos);
+        // World generation places blocks by the thousand, mostly where nothing is simulated. Simulated sections it
+        // reaches catch up with their next terrain refresh.
+        if(FluidicWater.generating > 0) return;
         byte code = Terrain.classify(world, pos, newState);
         if(code != Terrain.classify(world, pos, oldState)) simulation.setTerrain(pos, code);
     }

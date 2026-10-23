@@ -7,6 +7,7 @@ import net.minecraftforge.fml.client.event.ConfigChangedEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import fluidic.Fluidic;
+import fluidic.sim.Reservoirs;
 import fluidic.sim.Terrain;
 
 @Config(modid = Fluidic.MODID)
@@ -172,6 +173,22 @@ public class ForgeConfigHandler {
 				"minecraft:emerald_block=smooth"
 		};
 
+		@Config.Comment({
+				"Biomes whose large bodies of water are endless, like oceans and rivers. A body of water below sea level",
+				"is endless when its surface at sea level spans at least 128 blocks and reaches into one of these biomes,",
+				"small ponds stay ordinary water. Entries are biome ids, like minecraft:swampland, or biome dictionary",
+				"tags, like OCEAN, RIVER, BEACH, SWAMP or WET."})
+		@Config.Name("Reservoir Biomes")
+		public String[] reservoirBiomes = {"OCEAN", "RIVER", "BEACH", "SWAMP"};
+
+		@Config.Comment({
+				"Finds endless water by the body of water it belongs to: a sea or river counts past the edge of its biome,",
+				"while ponds and flooded caves below sea level inside those biomes do not. Turned off, every full water",
+				"block below sea level inside a reservoir biome is endless and none outside them are, which is cheaper",
+				"but less realistic."})
+		@Config.Name("Search Connected Water Bodies")
+		public boolean searchWaterBodies = true;
+
 		@Config.Comment("Chance per random tick that the surface of still water loses a sixteenth of a block to evaporation. Nothing evaporates while it rains or thunders, or below sea level.")
 		@Config.Name("Evaporation Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
@@ -239,6 +256,7 @@ public class ForgeConfigHandler {
 				ConfigManager.sync(Fluidic.MODID, Config.Type.INSTANCE);
 				// Classifications are cached, running simulations pick up the change with their terrain refreshes
 				Terrain.reload();
+				Reservoirs.reload();
 			}
 		}
 	}

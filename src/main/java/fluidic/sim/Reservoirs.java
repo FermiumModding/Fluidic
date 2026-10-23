@@ -1,6 +1,8 @@
 package fluidic.sim;
 
+import fluidic.Fluidic;
 import fluidic.block.FluidicWater;
+import fluidic.handlers.ForgeConfigHandler;
 import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -10,18 +12,25 @@ import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
+import net.minecraft.world.biome.Biome;
+import net.minecraftforge.common.BiomeDictionary;
+import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
- * Finds the bodies of water that are endless oceans and rivers. Biomes alone do not tell: oceans and rivers run
+ * Finds the bodies of water that are endless oceans, rivers and swamps. Biomes alone do not tell: oceans and rivers run
  * past the edge of their biome, under beaches and into other biomes, and pools in caves below sea level sit in
  * ocean biomes without being part of the sea. A body of water is an ocean or river when its surface at sea level
- * is large and reaches into an ocean, river or beach biome. Server thread only.
+ * is large and reaches into an ocean, river, beach or swamp biome. Server thread only.
  *
  * The search first finds the body's surface, straight up or around through the water below it, then spreads over
  * the surface. Spreading through the whole body instead would run out long before reaching the river in a wide,
@@ -37,7 +46,7 @@ public final class Reservoirs {
     private static final int MAX_LOWERED = 8;
     /** Blocks the surface may step down from one column to the next */
     private static final int MAX_STEP_DOWN = 2;
-    /** Most surface blocks searched for an ocean or river biome, a huge lake that never reaches one is not one */
+    /** Most surface blocks searched for a reservoir biome, a huge lake that never reaches one is not one */
     private static final int MAX_SURFACE_SEARCH = 65536;
     /** Ticks an answer is remembered, bodies of water rarely join or split */
     private static final long REMEMBER_TICKS = 2400L;
@@ -52,12 +61,65 @@ public final class Reservoirs {
     private static final long NONE = Long.MIN_VALUE;
     private static final EnumFacing[] FACINGS = EnumFacing.values();
     private static final Map<World, Memory> REMEMBERED = new WeakHashMap<>();
+    /** The configured reservoir biomes, parsed on first use */
+    private static volatile Set<Biome> biomes;
+    /** Counts config changes, remembered answers from before one are forgotten */
+    private static volatile int generation;
 
     private Reservoirs() {}
 
+    /** The config changed, maybe on another thread: biomes are parsed again and every answer is looked up again */
+    public static void reload() {
+        biomes = null;
+        generation++;
+    }
+
+    /** Whether large bodies of water in a biome are endless, see the Reservoir Biomes config */
+    public static boolean isReservoirBiome(Biome biome) {
+        Set<Biome> parsed = biomes;
+        if(parsed == null) biomes = parsed = parseBiomes(ForgeConfigHandler.server.reservoirBiomes);
+        return parsed.contains(biome);
+    }
+
+    /** Entries are biome ids like minecraft:swampland, or biome dictionary tags like OCEAN */
+    private static Set<Biome> parseBiomes(String[] entries) {
+        Set<Biome> parsed = Collections.newSetFromMap(new IdentityHashMap<>());
+        for(String raw : entries) {
+            String entry = raw.trim();
+            if(entry.isEmpty()) continue;
+            if(entry.indexOf(':') >= 0) {
+                Biome biome = ForgeRegistries.BIOMES.getValue(new ResourceLocation(entry));
+                if(biome != null) parsed.add(biome);
+                else Fluidic.LOGGER.warn("Reservoir Biomes: no biome " + entry);
+                continue;
+            }
+            BiomeDictionary.Type tag = null;
+            for(BiomeDictionary.Type type : BiomeDictionary.Type.getAll()) {
+                if(type.getName().equalsIgnoreCase(entry)) tag = type;
+            }
+            if(tag != null) parsed.addAll(BiomeDictionary.getBiomes(tag));
+            else Fluidic.LOGGER.warn("Reservoir Biomes: no biome tag " + entry + ", biome ids need their mod id, like minecraft:" + entry.toLowerCase());
+        }
+        return parsed;
+    }
+
+    /** The remembered answers of a world, forgotten when the config changed since */
+    private static Memory memory(World world) {
+        Memory remembered = REMEMBERED.computeIfAbsent(world, w -> new Memory());
+        int current = generation;
+        if(remembered.generation != current) {
+            remembered.answers.clear();
+            remembered.changes.clear();
+            remembered.generation = current;
+        }
+        return remembered;
+    }
+
     /** Whether the water block at a position, full and below sea level, belongs to an ocean or river */
     public static boolean isReservoir(World world, BlockPos pos) {
-        Memory remembered = REMEMBERED.computeIfAbsent(world, w -> new Memory());
+        // Without searching, the biome alone decides
+        if(!ForgeConfigHandler.server.searchWaterBodies) return isReservoirBiome(world.getBiome(pos));
+        Memory remembered = memory(world);
         long now = world.getTotalWorldTime();
         long known = remembered.known(pos.toLong(), now);
         if(known >= 0L) return (known & 1L) != 0;
@@ -69,16 +131,21 @@ public final class Reservoirs {
      * remembering the answer.
      */
     public static String describe(World world, BlockPos pos) {
-        Memory remembered = REMEMBERED.get(world);
-        long known = remembered == null ? -1L : remembered.known(pos.toLong(), world.getTotalWorldTime());
-        String cached = known >= 0L ? ((known & 1L) != 0 ? "yes" : "no") : "not looked up";        Search search = new Search(world, new Memory(), world.getTotalWorldTime());
+        if(!ForgeConfigHandler.server.searchWaterBodies) {
+            Biome biome = world.getBiome(pos);
+            return String.format("endless %s, by biome alone (connected water bodies are not searched), biome %s is %sa reservoir biome",
+                    isReservoirBiome(biome) ? "yes" : "no", biome.getRegistryName(), isReservoirBiome(biome) ? "" : "not ");
+        }
+        long known = memory(world).known(pos.toLong(), world.getTotalWorldTime());
+        String cached = known >= 0L ? ((known & 1L) != 0 ? "yes" : "no") : "not looked up";
+        Search search = new Search(world, new Memory(), world.getTotalWorldTime());
         boolean reservoir = search.search(pos);
         String surface = search.surfaceFound == NONE ? "none" : "y" + BlockPos.fromLong(search.surfaceFound).getY();
         BlockPos top = pos;
         while(top.getY() < world.getSeaLevel() - 1 && FluidicWater.isWater(world.getBlockState(top.up()))) top = top.up();
         String details = String.format(", sea level %d, water top y%d, above it %s with sky light %d",
                 world.getSeaLevel(), top.getY(), world.getBlockState(top.up()).getBlock().getRegistryName(), world.getLightFor(EnumSkyBlock.SKY, top.up()));
-        return String.format("endless %s (remembered %s), surface %s, %d surface columns searched, ocean or river biome %s%s",
+        return String.format("endless %s (remembered %s), surface %s, %d surface columns searched, reservoir biome %s%s",
                 reservoir ? "yes" : "no", cached, surface, search.columnsSearched, search.biomeFound ? "found" : "not found",
                 search.cutShort ? ", ran into unloaded chunks" : "") + details;
     }
@@ -107,6 +174,8 @@ public final class Reservoirs {
 
         private final Long2LongOpenHashMap answers = new Long2LongOpenHashMap();
         private final Long2LongOpenHashMap changes = new Long2LongOpenHashMap();
+        /** The config generation the answers were found under */
+        private int generation = Reservoirs.generation;
 
         Memory() {
             answers.defaultReturnValue(-1L);
@@ -259,7 +328,7 @@ public final class Reservoirs {
         }
 
         /**
-         * Spreads over the surface looking for an ocean or river biome, a column at a time. The surface need not be
+         * Spreads over the surface looking for a reservoir biome, a column at a time. The surface need not be
          * flat: a river that is losing water has thin blocks left on top here and there, so the top of each column
          * is followed up and down from the one beside it.
          */
@@ -275,7 +344,7 @@ public final class Reservoirs {
                 long packed = queue.getLong(n);
                 if(remembered.isKnownReservoir(packed, now)) return true;
                 BlockPos at = BlockPos.fromLong(packed);
-                if(!biome && FluidicWater.isReservoirBiome(world.getBiome(at))) biome = true;
+                if(!biome && isReservoirBiome(world.getBiome(at))) biome = true;
                 columnsSearched = queue.size();
                 biomeFound = biome;
                 if(biome && queue.size() >= MIN_SURFACE) return true;

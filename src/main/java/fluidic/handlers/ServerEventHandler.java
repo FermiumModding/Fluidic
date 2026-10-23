@@ -48,6 +48,8 @@ public class ServerEventHandler {
     @SubscribeEvent
     public static void onWorldTick(TickEvent.WorldTickEvent event) {
         if(event.phase != TickEvent.Phase.END || !(event.world instanceof WorldServer)) return;
+        // No chunk is being populated between ticks, this only matters if populating one ever threw
+        FluidicWater.generating = 0;
         WaterSimulation simulation = SimManager.get(event.world);
         if(simulation == null) return;
         rain((WorldServer)event.world, simulation);

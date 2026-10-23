@@ -358,6 +358,8 @@ public final class WaterRenderer {
         int height = ClientWaterCache.height(x, y, z);
         if(height == 0) return liquidHeight(world, x, y, z);
         if(ClientWaterCache.height(x, y + 1, z) > 0 || isLiquid(world, x, y + 1, z)) return 1.0F;
+        // Full water reaches up to an opaque block above it instead of leaving a gap of air under it
+        if(height >= 255 && isOpaque(world, x, y + 1, z)) return 1.0F;
         return height / 255.0F * FULL_HEIGHT;
     }
 
@@ -368,6 +370,7 @@ public final class WaterRenderer {
         if(!state.getMaterial().isLiquid()) return -1.0F;
         // Like FluidicWater.renderHeight: water continuing up into a block or simulated water makes it a column
         if(isLiquid(world, x, y + 1, z) || ClientWaterCache.height(x, y + 1, z) > 0) return 1.0F;
+        if(FluidicWater.isWater(state) && FluidicWater.level(state) == Water.LEVELS && isOpaque(world, x, y + 1, z)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return FULL_HEIGHT;
     }

@@ -12,6 +12,7 @@
     "vanilla.BlockLilyPadMixin",
     "vanilla.BlockMixin",
     "vanilla.BlockSpongeMixin",
+    "vanilla.ChunkMixin",
     "vanilla.EntityBoatMixin",
     "vanilla.EntityItemMixin",
     "vanilla.EntityMixin",

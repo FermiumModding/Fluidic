@@ -39,13 +39,18 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * **Settling**. A section that stays quiet for `Settle Steps` steps becomes water blocks and leaves the
   simulation, so a resting lake costs nothing. When a neighbour changes, or simulated water arrives at a
   different level, the simulation wakes them back up. Water placed by anything else, like a bucket, starts
-  flowing the same way.
-* **Oceans and rivers**. Full water below sea level that belongs to an ocean or river is an endless
-  reservoir: water flowing in disappears, and holes or caves opened beside or below it fill up from it,
-  so the sea never drains. A body of water counts when its surface at sea level is at least 128 blocks
-  and reaches into an ocean, river or beach biome (`Reservoirs`). The whole body counts, also where it
-  runs past the edge of its biome, while pools and flooded caves that do not reach the sea are ordinary
-  water. Damming off part of the sea makes it ordinary water right away.
+  flowing the same way. Water placed while a chunk is generated, like lakes and springs, stays as generated
+  (`ChunkMixin`) until something disturbs it or a random tick near a player finds it out of balance.
+* **Oceans, rivers and swamps**. Full water below sea level that belongs to an ocean, river or swamp is an
+  endless reservoir: water flowing in disappears, and holes or caves opened beside or below it fill up
+  from it, so the sea never drains. A body of water counts when its surface at sea level is at least 128
+  blocks and reaches into an ocean, river, beach or swamp biome (`Reservoirs`), so small ponds in a swamp
+  stay ordinary water. The biomes are set by the `Reservoir Biomes` server option, as biome ids like
+  `minecraft:swampland` or biome dictionary tags like `OCEAN`. Searching the body of water costs some time
+  when water changes below sea level. With `Search Connected Water Bodies` turned off, the biome alone
+  decides instead: all full water below sea level in a reservoir biome is endless, none outside it is. The whole body counts, also where it runs past the edge of its biome, while pools
+  and flooded caves that do not reach the sea are ordinary water. Damming off part of the sea makes it
+  ordinary water right away near the dam, and within two minutes further away.
 * **Rain**. While it rains, random columns of player-loaded chunks get a drop. This is the same sampling
   vanilla uses to place snow. Thunderstorms drop more. Leaves absorb some of the water dripping through.
 * **Evaporation**. Puddles, shallow pools and partly filled surfaces slowly evaporate, much faster in
