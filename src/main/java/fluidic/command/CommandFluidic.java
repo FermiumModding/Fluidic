@@ -1,5 +1,7 @@
 package fluidic.command;
 
+import fluidic.block.FluidicWater;
+import fluidic.sim.Reservoirs;
 import fluidic.sim.SimManager;
 import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
@@ -57,6 +59,10 @@ public class CommandFluidic extends CommandBase {
             sender.sendMessage(new TextComponentString(pos.getX() + " " + pos.getY() + " " + pos.getZ() + ": block " + state
                     + ", sky light " + world.getLightFor(EnumSkyBlock.SKY, pos) + ", block light " + world.getLightFor(EnumSkyBlock.BLOCK, pos)
                     + ", blocks " + state.getLightOpacity(world, pos) + " light, " + simulation.inspect(pos)));
+            // Whether water below sea level counts as part of an endless ocean or river, and why
+            if(FluidicWater.isWater(state) && pos.getY() < world.getSeaLevel()) {
+                sender.sendMessage(new TextComponentString(Reservoirs.describe(world, pos)));
+            }
         }
         else if(args[0].equals("rain") && args.length >= 5) {
             // Water the way a raindrop adds it, for testing how rain behaves without waiting for a storm

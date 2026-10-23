@@ -11,6 +11,7 @@ import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
+import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 import net.minecraft.world.biome.Biome;
 import net.minecraftforge.common.BiomeDictionary;
@@ -54,6 +55,14 @@ public final class FluidicWater {
      */
     public static boolean isReservoir(World world, BlockPos pos, IBlockState state) {
         return !world.isRemote && isWater(state) && level(state) == Water.LEVELS && pos.getY() < world.getSeaLevel() && Reservoirs.isReservoir(world, pos);
+    }
+
+    /**
+     * Whether a block lies open to the sky, by its sky light: leaves overhead take one level off, a cave roof far
+     * more. Vanilla's height map is not used, it counts any block high above, like a tree beside a river, as a roof.
+     */
+    public static boolean isUnderSky(World world, BlockPos pos) {
+        return world.getLightFor(EnumSkyBlock.SKY, pos) >= 14;
     }
 
     public static boolean isReservoirBiome(Biome biome) {

@@ -27,9 +27,11 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   pressure) from the same masses. It runs in parallel across sections on a shared fork/join pool. Phase 2
   moves the water serially, which is cheap, so flows crossing section borders cannot race.
 * **Terrain snapshots** (`Terrain`, `WaterWorldListener`). The simulation never touches the world. The
-  server thread classifies blocks (open, washable like flowers, permeable like ladders, porous leaves, solid
-  with a friction, or water of other mods that water flowing in merges with) from the `Block Classifications`
-  config, falling back to rules by material. It hands over whole-section snapshots and keeps them current
+  server thread classifies blocks (open, washable like flowers, permeable like ladders and fences,
+  waterloggable like stairs and slabs, porous leaves, solid with a friction, or water of other mods that water
+  flowing in merges with) from the `Block Classifications` config, falling back to rules by material.
+  Waterloggable blocks hold water like waterlogged blocks of later versions, but are sealed top and bottom so
+  a roof of slabs does not leak. It hands over whole-section snapshots and keeps them current
   through a world listener.
 * **Water blocks**. Vanilla water is replaced by Fluidic water under the same names (`minecraft:water`,
   `minecraft:flowing_water`), so vanilla and other mods treat it as plain water. It never flows on its own.
@@ -40,10 +42,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   flowing the same way.
 * **Oceans and rivers**. Full water below sea level that belongs to an ocean or river is an endless
   reservoir: water flowing in disappears, and holes or caves opened beside or below it fill up from it,
-  so the sea never drains. A body of water counts when it holds at least 256 blocks below sea level and
-  reaches the open surface at sea level in an ocean, river or beach biome (`Reservoirs`). The whole body
-  counts, also where it runs past the edge of its biome, while pools and flooded caves that do not reach
-  the sea are ordinary water.
+  so the sea never drains. A body of water counts when its surface at sea level is at least 128 blocks
+  and reaches into an ocean, river or beach biome (`Reservoirs`). The whole body counts, also where it
+  runs past the edge of its biome, while pools and flooded caves that do not reach the sea are ordinary
+  water. Damming off part of the sea makes it ordinary water right away.
 * **Rain**. While it rains, random columns of player-loaded chunks get a drop. This is the same sampling
   vanilla uses to place snow. Thunderstorms drop more. Leaves absorb some of the water dripping through.
 * **Evaporation**. Puddles, shallow pools and partly filled surfaces slowly evaporate, much faster in

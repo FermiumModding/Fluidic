@@ -76,7 +76,12 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     /** The surface of small bodies of still water evaporates, faster in direct sun, and soaks into soil */
     @Override
     public void randomTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
-        if(world.isRemote || FluidicWater.isReservoir(world, pos, state)) return;
+        if(world.isRemote) return;
+        if(FluidicWater.isReservoir(world, pos, state)) {
+            // An ocean or river that lost water below sea level fills back up, open sky above it is part of it
+            if(pos.getY() + 1 < world.getSeaLevel() && world.isAirBlock(pos.up())) neighborChanged(world, pos, state);
+            return;
+        }
         WaterSimulation simulation = SimManager.get(world);
         // Its water already went into the simulation
         if(simulation != null && simulation.isRemoving(pos)) return;

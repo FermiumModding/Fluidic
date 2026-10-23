@@ -13,6 +13,7 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -25,6 +26,7 @@ import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.util.Constants;
+import net.minecraftforge.event.ForgeEventFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -178,7 +180,9 @@ public final class WaterSimulation {
         if(isRemoving(pos)) return;
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         byte[] codes = Terrain.neighbors(world, pos);
-        enqueue(sim -> sim.doNeighborCheck(x, y, z, level, reservoir, codes));
+        // An ocean or river below sea level fills up open sky above it, so a river that lost water rises again
+        boolean fillUp = reservoir && y + 1 < world.getSeaLevel() && FluidicWater.isUnderSky(world, pos.up());
+        enqueue(sim -> sim.doNeighborCheck(x, y, z, level, reservoir, fillUp, codes));
     }
 
     public void chunkLoaded(int cx, int cz) {
@@ -264,12 +268,29 @@ public final class WaterSimulation {
             else setTerrain(pos, Terrain.classify(world, pos, state));
         }
 
+        for(int n = 0; n < step.quenches.size(); n++) {
+            BlockPos pos = BlockPos.fromLong(step.quenches.getLong(n));
+            if(!world.isBlockLoaded(pos)) continue;
+            IBlockState state = world.getBlockState(pos);
+            // Lava running into water turns to stone, as vanilla lava flowing onto water does. A source poured into it
+            // turns to obsidian, as a source beside water does.
+            if(state.getMaterial() == Material.LAVA) harden(pos, (state.getValue(BlockLiquid.LEVEL) == 0 ? Blocks.OBSIDIAN : Blocks.STONE).getDefaultState());
+            else state.getBlock().neighborChanged(state, world, pos, Blocks.WATER, pos);
+            setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
+        }
+
         for(int n = 0; n < step.touches.size(); n++) {
             BlockPos pos = BlockPos.fromLong(step.touches.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
-            // The block rechecks its surroundings as if water had been placed beside it, concrete powder hardens
             IBlockState state = world.getBlockState(pos);
-            state.getBlock().neighborChanged(state, world, pos, Blocks.WATER, pos);
+            // Lava mixes like vanilla lava does with water beside or above it
+            if(state.getMaterial() == Material.LAVA) {
+                int level = state.getValue(BlockLiquid.LEVEL);
+                if(level == 0) harden(pos, Blocks.OBSIDIAN.getDefaultState());
+                else if(level <= 4) harden(pos, Blocks.COBBLESTONE.getDefaultState());
+            }
+            // The block rechecks its surroundings as if water had been placed beside it, concrete powder hardens
+            else state.getBlock().neighborChanged(state, world, pos, Blocks.WATER, pos);
             setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
         }
 
@@ -337,6 +358,12 @@ public final class WaterSimulation {
             if(payload.afterBlocks) latePayloads.add(payload);
             else send(payload);
         }
+    }
+
+    /** Turns lava touched by water into a block, with the hiss and smoke of vanilla lava meeting water */
+    private void harden(BlockPos pos, IBlockState hardened) {
+        world.setBlockState(pos, ForgeEventFactory.fireFluidPlaceBlockEvent(world, pos, pos, hardened));
+        world.playEvent(1501, pos, 0);
     }
 
     private void removeWoken() {
@@ -454,6 +481,7 @@ public final class WaterSimulation {
         // Phase 2: move the water, cheap and serial since flows cross section borders
         for(WaterSection section : stepList) section.applyFlows();
         for(WaterSection section : stepList) countSoaks(section);
+        for(WaterSection section : stepList) mergeIntoReservoirs(section);
 
         for(WaterSection section : stepList) {
             for(int n = 0; n < section.wakes.size(); n++) {
@@ -508,11 +536,17 @@ public final class WaterSimulation {
                 section.idleSteps = 0;
                 if(step % EVAPORATE_STEPS == 0) {
                     linkNeighbors(section);
-                    if(section.evaporate(random, evaporation, absorption, seaLevel)) section.dirtyNet = true;
+                    if(section.evaporate(random, evaporation, absorption, seaLevel, false)) section.dirtyNet = true;
                 }
             }
             else if(section.state == WaterSection.STATE_READY && section.filled > 0) {
                 section.idleSteps = 0;
+                // Thin water dries up even while the section never comes to rest, a film left by rain would otherwise
+                // stay for good wherever a little water keeps moving
+                if(step % EVAPORATE_STEPS == 0) {
+                    linkNeighbors(section);
+                    if(section.evaporate(random, evaporation, absorption, seaLevel, true)) section.dirtyNet = true;
+                }
                 if(section.pending || section.touched || section.maxFlow > Water.QUIET_FLOW) {
                     section.quietSteps = 0;
                     if(section.pending) waiting++;
@@ -592,6 +626,37 @@ public final class WaterSimulation {
     }
 
     /**
+     * Full water on top of or beside an ocean or river below sea level becomes part of it right away. Waiting for it
+     * to be still could take for ever: rain keeps landing on it and running off into the ocean, and deep water beside
+     * it keeps pressing on.
+     */
+    private void mergeIntoReservoirs(WaterSection section) {
+        for(int n = 0; n < section.merges.size(); n++) {
+            int i = section.merges.getInt(n);
+            // A water block would replace a ladder, stairs and the like, water in them stays simulated
+            byte code = section.terrain[i];
+            if(code != WaterSection.OPEN && code != WaterSection.WASHABLE || section.mass[i] < Water.FULL - Water.SPREAD_DIFF) continue;
+            section.removeMass(i, section.mass[i]);
+            section.terrain[i] = WaterSection.RESERVOIR;
+            section.dirtyNet = true;
+            result.settles.add(blockPos(section, i));
+            result.settleLevels.add(Water.LEVELS);
+            // The ocean goes on into the open space above, still below sea level, like a river that lost water, and
+            // beside it, like the shallow edge of a river
+            int x = section.sx * 16 + (i & 15), y = section.sy * 16 + (i >> 8), z = section.sz * 16 + ((i >> 4) & 15);
+            for(int dir = Water.UP; dir <= Water.EAST; dir++) {
+                int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
+                if(ny < seaLevel && massAt(nx, ny, nz) == 0 && isOpenAt(nx, ny, nz)) doAddWater(nx, ny, nz, WaterSection.RESERVOIR_FLOW, false);
+            }
+        }
+    }
+
+    private boolean isOpenAt(int x, int y, int z) {
+        WaterSection section = readySection(x, y, z);
+        return section != null && section.terrain[Water.cellIndex(x & 15, y & 15, z & 15)] == WaterSection.OPEN;
+    }
+
+    /**
      * Counts the water soaked into sponges this step against what each can hold. Water past that goes back to the
      * cell it came from, and full sponges turn wet.
      */
@@ -648,7 +713,7 @@ public final class WaterSimulation {
             // Shallow water around a flower stays simulated, it only washes the flower away above half a block
             if(code == WaterSection.WASHABLE && level > 0 && level <= Water.LEVELS / 2) continue;
             // A water block cannot share a ladder, sign or leaves, water there stays simulated and is drawn inside them
-            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS) && level > 0) continue;
+            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS || code == WaterSection.WATERLOGGABLE) && level > 0) continue;
             section.mass[i] = 0;
             // Less than half a level dries up
             if(level > 0 && WaterSection.isOpen(code)) {
@@ -757,6 +822,8 @@ public final class WaterSimulation {
         int bi = WaterSection.neighborIndex(i, Water.DOWN);
         int code = WaterSection.codeOf(below, bi);
         if(code < 0 || code == WaterSection.WAKING) return false;
+        // Water cannot sink into a waterloggable block, it rests on it
+        if(code == WaterSection.WATERLOGGABLE) return true;
         if(WaterSection.holds(code)) return below.mass[bi] >= Water.FULL - Water.SPREAD_DIFF;
         if(code >= WaterSection.SETTLED) return code - WaterSection.SETTLED == Water.LEVELS;
         return true;
@@ -839,7 +906,7 @@ public final class WaterSimulation {
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
         byte code = section.terrain[i];
         if(code == WaterSection.SINK || code == WaterSection.RESERVOIR) return true;
-        if(WaterSection.holds(code)) return section.mass[i] < Water.FULL - Water.SPREAD_DIFF;
+        if(WaterSection.holds(code)) return code != WaterSection.WATERLOGGABLE && section.mass[i] < Water.FULL - Water.SPREAD_DIFF;
         return code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS;
     }
 
@@ -911,6 +978,8 @@ public final class WaterSimulation {
         }
         int mass = section.mass[i];
         if(!WaterSection.holds(code) && mass > 0) {
+            // Lava flowing into water turns to stone
+            if(code == WaterSection.SOLID_REACTIVE) result.quenches.add(blockPos(section, i));
             // A block was placed into water, push the water up out of it
             section.removeMass(i, mass);
             section.dirtyNet = true;
@@ -967,7 +1036,7 @@ public final class WaterSimulation {
         }
     }
 
-    private void doNeighborCheck(int x, int y, int z, int level, boolean reservoir, byte[] codes) {
+    private void doNeighborCheck(int x, int y, int z, int level, boolean reservoir, boolean fillUp, byte[] codes) {
         WaterSection self = readySection(x, y, z);
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
         if(self != null && self.terrain[i] == WaterSection.WAKING) return;
@@ -978,7 +1047,8 @@ public final class WaterSimulation {
         }
 
         if(reservoir) {
-            // Oceans never wake, they pour into open space beside and below them and keep it filled. A sponge touching
+            // Oceans never wake, they pour into open space beside and below them and keep it filled, and below sea level
+            // into open sky above them too. A sponge touching
             // one fills up at once.
             for(int dir = 0; dir < 6; dir++) {
                 int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
@@ -989,7 +1059,7 @@ public final class WaterSimulation {
                     result.wetSponges.add(sponge.toLong());
                     continue;
                 }
-                if(dir == Water.UP || !WaterSection.isOpen(codes[dir])) continue;
+                if(dir == Water.UP && !fillUp || !WaterSection.isOpen(codes[dir])) continue;
                 if(massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF) doAddWater(nx, ny, nz, WaterSection.RESERVOIR_FLOW, false);
             }
             return;
@@ -1004,7 +1074,7 @@ public final class WaterSimulation {
             else if(dir == Water.DOWN) {
                 // Leaves below take water until they are full of it
                 wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR
-                        || (WaterSection.holds(code) && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
+                        || (WaterSection.holds(code) && code != WaterSection.WATERLOGGABLE && massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF)
                         || (code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS);
             }
             else if(dir == Water.UP) {

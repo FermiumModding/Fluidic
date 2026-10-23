@@ -22,6 +22,8 @@ final class StepResult {
     final LongArrayList washes = new LongArrayList();
     /** Block positions of blocks that react to water, like concrete powder, that water reached */
     final LongArrayList touches = new LongArrayList();
+    /** Block positions of reactive blocks placed into water, like lava flowing into it */
+    final LongArrayList quenches = new LongArrayList();
     /** Block positions of dry sponges that soaked up all they can hold */
     final LongArrayList wetSponges = new LongArrayList();
     /** Block positions of settled water blocks to turn back into simulated water */

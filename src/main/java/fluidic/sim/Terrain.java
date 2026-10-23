@@ -42,6 +42,7 @@ public final class Terrain {
         CLASSES.put("open", WaterSection.OPEN);
         CLASSES.put("washable", WaterSection.WASHABLE);
         CLASSES.put("permeable", WaterSection.PERMEABLE);
+        CLASSES.put("waterloggable", WaterSection.WATERLOGGABLE);
         CLASSES.put("porous", WaterSection.POROUS);
         CLASSES.put("solid", WaterSection.SOLID);
         CLASSES.put("rough", WaterSection.SOLID_ROUGH);
@@ -86,6 +87,12 @@ public final class Terrain {
 
     public static boolean isOpen(IBlockState state) {
         return WaterSection.isOpen(classify(state));
+    }
+
+    /** Whether rain falls through the block to what lies below, waterloggable blocks like slabs keep it out */
+    public static boolean letsRainThrough(IBlockState state) {
+        byte code = classify(state);
+        return code == WaterSection.POROUS || WaterSection.isOpen(code) && code != WaterSection.WATERLOGGABLE;
     }
 
     public static boolean isWashable(IBlockState state) {
@@ -173,6 +180,8 @@ public final class Terrain {
         Material material = state.getMaterial();
         if(material == Material.AIR) return WaterSection.OPEN;
         if(material == Material.WATER) return WaterSection.SINK;
+        // Lava hardens where water touches it
+        if(material == Material.LAVA) return WaterSection.SOLID_REACTIVE;
         if(material.isLiquid() || material == Material.PORTAL || material == Material.STRUCTURE_VOID) return WaterSection.SOLID;
         if(block instanceof BlockConcretePowder) return WaterSection.SOLID_REACTIVE;
         if(material == Material.LEAVES) return WaterSection.POROUS;

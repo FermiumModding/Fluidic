@@ -93,7 +93,7 @@ public class ServerEventHandler {
         // Rain drips through leaves and plants down to the ground
         while(pos.getY() > 0) {
             IBlockState below = world.getBlockState(pos.down());
-            if(!Terrain.isPorous(below) && !Terrain.isOpen(below)) break;
+            if(!Terrain.letsRainThrough(below)) break;
             pos = pos.down();
         }
         if(pos.getY() <= 0) return;

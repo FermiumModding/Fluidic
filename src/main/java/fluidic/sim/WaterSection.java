@@ -42,6 +42,11 @@ final class WaterSection {
     static final byte RESERVOIR = 10;
     /** A dry sponge, soaks up water flowing into it until it is full, see {@link WaterSimulation} */
     static final byte SPONGE = 11;
+    /**
+     * A block water can be in, like modern waterlogged stairs and slabs: water flows in and out sideways and stays
+     * simulated inside it, but it is sealed top and bottom, so a roof of slabs does not leak.
+     */
+    static final byte WATERLOGGABLE = 12;
     /** Water a sponge soaks up per side and step */
     private static final int SPONGE_RATE = Water.UNIT / 2;
 
@@ -115,6 +120,8 @@ final class WaterSection {
     final LongArrayList touches = new LongArrayList();
     /** Water soaked into sponges this step, pairs of the sponge cell (packCell) and the source cell << 32 | amount */
     final LongArrayList soaks = new LongArrayList();
+    /** Cells on top of or beside an ocean below sea level, they join it once full */
+    final IntArrayList merges = new IntArrayList();
 
     WaterSection(int sx, int sy, int sz) {
         this.sx = sx;
@@ -223,10 +230,11 @@ final class WaterSection {
      * Water left in a dormant section, shallow water around plants and water held in leaves, slowly dries up.
      * Not under more water, leaves inside a pool stay full. Returns whether anything changed.
      */
-    boolean evaporate(java.util.Random rand, double evaporation, double absorption, int seaLevel) {
+    boolean evaporate(java.util.Random rand, double evaporation, double absorption, int seaLevel, boolean filmsOnly) {
         boolean changed = false;
         for(int i = 0; i < 4096; i++) {
             if(mass[i] == 0 || underWater(i)) continue;
+            if(filmsOnly && !isFilm(i)) continue;
             // Nothing evaporates below sea level, the ground still soaks water up
             double chance = sy * 16 + (i >> 8) < seaLevel ? absorption : evaporation + absorption;
             if(rand.nextDouble() < chance) {
@@ -244,6 +252,15 @@ final class WaterSection {
         WaterSection up = neighborSection(i, Water.UP);
         int ui = neighborIndex(i, Water.UP);
         return holds(codeOf(up, ui)) && up.mass[ui] > 0;
+    }
+
+    /** Half a block or less of water resting on the ground rather than on more water */
+    private boolean isFilm(int i) {
+        if(mass[i] > Water.FULL / 2) return false;
+        WaterSection down = neighborSection(i, Water.DOWN);
+        int di = neighborIndex(i, Water.DOWN);
+        int code = codeOf(down, di);
+        return !(code >= SETTLED || code == RESERVOIR || code == SINK || holds(code) && down.mass[di] > 0);
     }
 
     private boolean underWater(int i) {
@@ -292,7 +309,7 @@ final class WaterSection {
 
     /** Whether water can flow freely into a cell with this terrain code */
     static boolean isOpen(int code) {
-        return code == OPEN || code == WASHABLE || code == PERMEABLE;
+        return code == OPEN || code == WASHABLE || code == PERMEABLE || code == WATERLOGGABLE;
     }
 
     static int codeOf(WaterSection s, int i) {
@@ -321,6 +338,7 @@ final class WaterSection {
         washes.clear();
         touches.clear();
         soaks.clear();
+        merges.clear();
         for(int i = 0; i < 4096; i++) {
             int m = mass[i];
             if(m == 0) {
@@ -350,6 +368,8 @@ final class WaterSection {
         WaterSection ns = neighborSection(i, Water.DOWN);
         int ni = neighborIndex(i, Water.DOWN);
         int code = codeOf(ns, ni);
+        // Waterloggable blocks are sealed at the bottom and top
+        if(code == WATERLOGGABLE || terrain[i] == WATERLOGGABLE) code = SOLID;
         if(holds(code)) {
             int below = ns.mass[ni];
             int f = Water.stableBelow(r + below) - below;
@@ -374,6 +394,8 @@ final class WaterSection {
                 // Filled from below too, a wide sheet would only fill slowly from where it touches the ocean's side
                 addSource(i, Math.min(RESERVOIR_FLOW, Water.FULL - r));
             }
+            // Once full it is ocean, see WaterSimulation.mergeIntoReservoirs
+            merges.add(i);
         }
         else if(code == SINK || code == RESERVOIR) {
             addFlow(i, Water.DOWN, r, true);
@@ -397,6 +419,7 @@ final class WaterSection {
         ns = neighborSection(i, Water.UP);
         ni = neighborIndex(i, Water.UP);
         int upCode = codeOf(ns, ni);
+        if(upCode == WATERLOGGABLE || terrain[i] == WATERLOGGABLE) upCode = SOLID;
         if(upCode >= SETTLED && m < Water.FULL - Water.SPREAD_DIFF) wake(ns, ni);
         // An ocean above pours in without ever draining
         if(upCode == RESERVOIR && m < Water.FULL - Water.SPREAD_DIFF) addSource(i, Math.min(Water.FULL - m, RESERVOIR_FLOW));
@@ -438,15 +461,13 @@ final class WaterSection {
                 }
             }
             else if(code == RESERVOIR) {
-                // Levels out with the full reservoir: water above its level runs into it, below it fills up from it
-                if(r0 > Water.FULL + Water.SPREAD_DIFF) {
-                    int f = (r0 - Water.FULL) / 5;
-                    addFlow(i, dir, f, true);
-                    out += f;
-                }
-                else if(r0 < Water.FULL - Water.SPREAD_DIFF) {
-                    addSource(i, Math.min(RESERVOIR_FLOW, Math.max(1, (Water.FULL - r0) * flowRate / 5000)));
-                }
+                // Water beside an ocean is part of it: it fills up from it and joins it once full, see
+                // WaterSimulation.mergeIntoReservoirs. Draining the slight pressure of deep water into it instead would
+                // keep the water above pushing down to replace it, and the edge of a river would never settle.
+                // The ocean pushes in at full rate whatever the ground, a shallow edge would otherwise creep full over
+                // rough ground a unit at a time.
+                if(r0 < Water.FULL - Water.SPREAD_DIFF) addSource(i, Math.min(RESERVOIR_FLOW, Water.FULL - r0));
+                merges.add(i);
             }
             else if(code == SPONGE) {
                 int f = Math.min(Math.min(SPONGE_RATE, Math.max(1, r0 / 4)), r - out);
@@ -514,6 +535,7 @@ final class WaterSection {
         int bi = neighborIndex(ni, Water.DOWN);
         int code = codeOf(below, bi);
         if(code == SINK || code == RESERVOIR) return true;
+        if(code == WATERLOGGABLE) return false;
         if(holds(code)) return below.mass[bi] < Water.FULL - Water.SPREAD_DIFF;
         return code >= SETTLED && code - SETTLED < Water.LEVELS;
     }
@@ -528,7 +550,7 @@ final class WaterSection {
             int ni = neighborIndex(i, dir);
             int code = codeOf(ns, ni);
             if(code == RESERVOIR) addSource(i, RESERVOIR_FLOW);
-            else if(code >= SETTLED && (dir == Water.UP || code - SETTLED >= 2)) wake(ns, ni);
+            else if(code >= SETTLED && (dir == Water.UP && terrain[i] != WATERLOGGABLE || code - SETTLED >= 2)) wake(ns, ni);
             else if(ns != null && ns.dormant && ns.mass[ni] > 0) wakeSections.add(ns.key);
         }
     }
