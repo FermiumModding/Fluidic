@@ -74,6 +74,13 @@ public class ForgeConfigHandler {
 		@Config.Name("Enable Rain Accumulation")
 		public boolean enableRain = true;
 
+		@Config.Comment({
+				"Biomes where rain adds water, on top of the biome raining at all. Some modded deserts report rain without",
+				"showing any, water would collect there. Entries are biome ids, like minecraft:plains, biome dictionary tags,",
+				"like FOREST or SANDY, or * for every biome. An entry starting with ! leaves its biomes out, like !SNOWY."})
+		@Config.Name("Rain Biomes")
+		public String[] rainBiomes = {"*", "!SANDY", "!SNOWY"};
+
 		@Config.Comment("Chance per player loaded chunk per tick that a raindrop lands in it while it rains.")
 		@Config.Name("Rain Chance")
 		@Config.RangeDouble(min = 0.0D, max = 1.0D)
@@ -270,6 +277,7 @@ public class ForgeConfigHandler {
 				// Classifications are cached, running simulations pick up the change with their terrain refreshes
 				Terrain.reload();
 				Reservoirs.reload();
+				ServerEventHandler.reload();
 			}
 		}
 	}

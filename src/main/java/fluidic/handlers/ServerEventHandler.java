@@ -4,6 +4,7 @@ import fluidic.Fluidic;
 import fluidic.block.FluidicWater;
 import fluidic.network.MessageVanillaDimensions;
 import fluidic.network.PacketHandler;
+import fluidic.sim.BiomeList;
 import fluidic.sim.SimManager;
 import fluidic.sim.Terrain;
 import fluidic.sim.Water;
@@ -15,6 +16,7 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
+import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraftforge.event.world.ChunkEvent;
 import net.minecraftforge.event.world.ChunkWatchEvent;
@@ -27,9 +29,18 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.util.Iterator;
 import java.util.Random;
+import java.util.Set;
 
 @Mod.EventBusSubscriber(modid = Fluidic.MODID)
 public class ServerEventHandler {
+
+    /** The configured rain biomes, parsed on first use */
+    private static volatile Set<Biome> rainBiomes;
+
+    /** The config changed: rain biomes are parsed again */
+    static void reload() {
+        rainBiomes = null;
+    }
 
     @SubscribeEvent
     public static void onWorldLoad(WorldEvent.Load event) {
@@ -105,6 +116,9 @@ public class ServerEventHandler {
     private static void drop(WorldServer world, WaterSimulation simulation, Chunk chunk, Random rand, int amount) {
         BlockPos pos = world.getPrecipitationHeight(new BlockPos(chunk.x * 16 + rand.nextInt(16), 0, chunk.z * 16 + rand.nextInt(16)));
         if(!world.isRainingAt(pos)) return;
+        Set<Biome> biomes = rainBiomes;
+        if(biomes == null) rainBiomes = biomes = BiomeList.parse("Rain Biomes", ForgeConfigHandler.server.rainBiomes);
+        if(!biomes.contains(world.getBiome(pos))) return;
         // Rain drips through leaves and plants down to the ground
         while(pos.getY() > 0) {
             IBlockState below = world.getBlockState(pos.down());

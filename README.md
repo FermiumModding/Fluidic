@@ -53,6 +53,9 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   ordinary water right away near the dam, and within two minutes further away.
 * **Rain**. While it rains, random columns of player-loaded chunks get a drop. This is the same sampling
   vanilla uses to place snow. Thunderstorms drop more. Leaves absorb some of the water dripping through.
+  The `Rain Biomes` server option limits the biomes it collects in, by biome id or biome dictionary tag, with `*` for
+  every biome and `!` to leave biomes out. By default sandy and snowy biomes are left out, some modded deserts and snowy biomes report rain
+  without showing any.
 * **Evaporation**. Puddles, shallow pools and partly filled surfaces slowly evaporate, much faster in
   direct sun, and water resting on soil soaks into the ground. Nothing evaporates while it rains or
   thunders or below sea level, though soil keeps soaking water up. Lakes and oceans keep their water.

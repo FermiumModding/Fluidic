@@ -1,6 +1,5 @@
 package fluidic.sim;
 
-import fluidic.Fluidic;
 import fluidic.block.FluidicWater;
 import fluidic.handlers.ForgeConfigHandler;
 import it.unimi.dsi.fastutil.longs.Long2LongMap;
@@ -13,17 +12,12 @@ import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
-import net.minecraftforge.common.BiomeDictionary;
-import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -79,30 +73,8 @@ public final class Reservoirs {
     /** Whether large bodies of water in a biome are endless, see the Reservoir Biomes config */
     public static boolean isReservoirBiome(Biome biome) {
         Set<Biome> parsed = biomes;
-        if(parsed == null) biomes = parsed = parseBiomes(ForgeConfigHandler.server.reservoirBiomes);
+        if(parsed == null) biomes = parsed = BiomeList.parse("Reservoir Biomes", ForgeConfigHandler.server.reservoirBiomes);
         return parsed.contains(biome);
-    }
-
-    /** Entries are biome ids like minecraft:swampland, or biome dictionary tags like OCEAN */
-    private static Set<Biome> parseBiomes(String[] entries) {
-        Set<Biome> parsed = Collections.newSetFromMap(new IdentityHashMap<>());
-        for(String raw : entries) {
-            String entry = raw.trim();
-            if(entry.isEmpty()) continue;
-            if(entry.indexOf(':') >= 0) {
-                Biome biome = ForgeRegistries.BIOMES.getValue(new ResourceLocation(entry));
-                if(biome != null) parsed.add(biome);
-                else Fluidic.LOGGER.warn("Reservoir Biomes: no biome " + entry);
-                continue;
-            }
-            BiomeDictionary.Type tag = null;
-            for(BiomeDictionary.Type type : BiomeDictionary.Type.getAll()) {
-                if(type.getName().equalsIgnoreCase(entry)) tag = type;
-            }
-            if(tag != null) parsed.addAll(BiomeDictionary.getBiomes(tag));
-            else Fluidic.LOGGER.warn("Reservoir Biomes: no biome tag " + entry + ", biome ids need their mod id, like minecraft:" + entry.toLowerCase());
-        }
-        return parsed;
     }
 
     /** The remembered answers of a world, forgotten when the config changed since */
