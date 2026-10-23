@@ -7,13 +7,16 @@ import fluidic.block.FluidicWater;
 import fluidic.compat.FluidloggedCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockConcretePowder;
+import net.minecraft.block.BlockDoor;
 import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
@@ -21,6 +24,7 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraftforge.common.IPlantable;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
+import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -165,6 +169,7 @@ public final class Terrain {
     /** Terrain code of the block at a position, telling ocean and river reservoirs apart from other water */
     public static byte classify(World world, BlockPos pos, IBlockState state) {
         if(FluidicWater.isReservoir(world, pos, state)) return WaterSection.RESERVOIR;
+        if(isDoor(state)) return door(world, pos, state);
         byte code = classify(state);
         // Water stored inside the block by Fluidlogged API is settled water there
         if(FluidloggedCompat.isLoaded() && storesWater(code)) {
@@ -179,6 +184,34 @@ public final class Terrain {
      * the flag apart from the code. Codes stay below it.
      */
     public static final byte STORABLE = 0x20;
+
+    /** A door not listed in the config, water flows through it except across the side the door is on */
+    public static boolean isDoor(IBlockState state) {
+        return state.getBlock() instanceof BlockDoor && configured(state) == UNSET;
+    }
+
+    /**
+     * Terrain code of a door, by the side its door is on, open or closed. Both halves of a door count, the upper
+     * half's state comes from the lower one.
+     */
+    private static byte door(IBlockAccess world, BlockPos pos, IBlockState state) {
+        EnumFacing side = doorSide(world, pos, state);
+        if(side == null) return fallback(state);
+        int dir = side == EnumFacing.WEST ? Water.WEST : side == EnumFacing.EAST ? Water.EAST : side == EnumFacing.NORTH ? Water.NORTH : Water.SOUTH;
+        return (byte)(WaterSection.DOOR + dir - Water.NORTH);
+    }
+
+    /** The side of its block a door is on, open or closed, null if it is no door or fills its block */
+    @Nullable
+    public static EnumFacing doorSide(IBlockAccess world, BlockPos pos, IBlockState state) {
+        if(!isDoor(state)) return null;
+        AxisAlignedBB box = state.getBoundingBox(world, pos);
+        if(box.maxX <= 0.25D) return EnumFacing.WEST;
+        if(box.minX >= 0.75D) return EnumFacing.EAST;
+        if(box.maxZ <= 0.25D) return EnumFacing.NORTH;
+        if(box.minZ >= 0.75D) return EnumFacing.SOUTH;
+        return null;
+    }
 
     /** Blocks water stays inside of, which Fluidlogged API can keep it in as a fluid state, not plants it washes away */
     public static boolean storesWater(IBlockState state) {
@@ -197,7 +230,7 @@ public final class Terrain {
     public static boolean holdsWater(IBlockState state) {
         byte code = classify(state);
         return code == WaterSection.WASHABLE || code == WaterSection.PERMEABLE || code == WaterSection.WATERLOGGABLE
-                || code == WaterSection.POROUS;
+                || code == WaterSection.POROUS || isDoor(state);
     }
 
     /** Whether rain falls through the block to what lies below, waterloggable blocks like slabs keep it out */
@@ -355,6 +388,7 @@ public final class Terrain {
                 for(int y = 15; y >= 0; y--) {
                     IBlockState state = storage.get(x, y, z);
                     byte code = classify(state);
+                    if(isDoor(state)) code = door(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z), state);
                     if(fluidlogged && storesWater(code)) {
                         // Water Fluidlogged API keeps inside the block is settled water, the block may take settling water
                         pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z);

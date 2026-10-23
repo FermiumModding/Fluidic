@@ -933,7 +933,7 @@ public final class WaterSimulation {
             // A water block cannot share a ladder, sign or leaves, water there stays simulated and is drawn inside them.
             // With Fluidlogged API the block keeps it as a fluid state instead.
             boolean stored = section.canStore(i);
-            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS || code == WaterSection.WATERLOGGABLE) && level > 0 && !stored) continue;
+            if((code == WaterSection.PERMEABLE || code == WaterSection.POROUS || code == WaterSection.WATERLOGGABLE || WaterSection.isDoor(code)) && level > 0 && !stored) continue;
             section.mass[i] = 0;
             // Less than half a level dries up
             if(level > 0 && (WaterSection.isOpen(code) || stored)) {
@@ -1330,7 +1330,7 @@ public final class WaterSimulation {
                     result.wetSponges.add(sponge.toLong());
                     continue;
                 }
-                if(dir == Water.UP && !fillUp || !WaterSection.isOpen(codes[dir])) continue;
+                if(dir == Water.UP && !fillUp || !WaterSection.isOpen(codes[dir]) || WaterSection.blocksSide(codes[dir], dir ^ 1)) continue;
                 if(massAt(nx, ny, nz) < Water.FULL - Water.SPREAD_DIFF) doAddWater(nx, ny, nz, WaterSection.RESERVOIR_FLOW, false);
             }
             return;
@@ -1351,7 +1351,8 @@ public final class WaterSimulation {
             else if(dir == Water.UP) {
                 wake = code >= WaterSection.SETTLED && level < Water.LEVELS;
             }
-            else if(WaterSection.isOpen(code)) {
+            // Not through the side of a door
+            else if(WaterSection.isOpen(code) && !WaterSection.blocksSide(code, dir ^ 1)) {
                 int mass = massAt(nx, ny, nz);
                 // Thin water stays on flat ground, but spills over the edge of a ledge
                 wake = mass == 0 ? level >= 2 || acceptsFalling(nx, ny - 1, nz) : level * Water.UNIT - mass > Water.WAKE_DIFF;

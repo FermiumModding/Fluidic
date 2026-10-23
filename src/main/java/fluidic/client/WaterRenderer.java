@@ -4,6 +4,7 @@ import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.block.FluidicWater;
 import fluidic.mixin.vanilla.EntityRendererAccessor;
+import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -24,6 +25,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.world.biome.BiomeColorHelper;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
@@ -278,10 +280,30 @@ public final class WaterRenderer {
         // falling stream, is full height on its own and draws its sides down to the water around it
         boolean column = surface >= 1.0F;
         // The corners as the water around shares them, a column's sides reach down to these
-        float s00 = corner(world, x, y, z, surface);
-        float s10 = corner(world, x + 1, y, z, surface);
-        float s11 = corner(world, x + 1, y, z + 1, surface);
-        float s01 = corner(world, x, y, z + 1, surface);
+        BlockPos cell = new BlockPos(x, y, z);
+        float s00 = corner(world, x, y, z, surface, cell);
+        float s10 = corner(world, x + 1, y, z, surface, cell);
+        float s11 = corner(world, x + 1, y, z + 1, surface, cell);
+        float s01 = corner(world, x, y, z + 1, surface, cell);
+        // Water inside a door is level with the water on its open side. Against the door only its own water counts,
+        // which stays simulated a little below the water around it, and the surface would slope down to the door.
+        EnumFacing door = Terrain.doorSide(world, cell, world.getBlockState(cell));
+        if(door == EnumFacing.WEST) {
+            s00 = s10;
+            s01 = s11;
+        }
+        else if(door == EnumFacing.EAST) {
+            s10 = s00;
+            s11 = s01;
+        }
+        else if(door == EnumFacing.NORTH) {
+            s00 = s01;
+            s10 = s11;
+        }
+        else if(door == EnumFacing.SOUTH) {
+            s01 = s00;
+            s11 = s10;
+        }
         float h00 = column ? 1.0F : s00;
         float h10 = column ? 1.0F : s10;
         float h11 = column ? 1.0F : s11;
@@ -423,18 +445,31 @@ public final class WaterRenderer {
      * of water share their corners: solid blocks are left out, open blocks count as dry and near full cells
      * weigh more.
      */
-    private static float corner(WorldClient world, int x, int y, int z, float fallback) {
+    private static float corner(WorldClient world, int x, int y, int z, float fallback, BlockPos cell) {
         // Corners touching water blocks follow the blocks alone, like FluidicWater.cornerHeight, the blocks are only
         // redrawn when simulated water appears or vanishes beside them, not every time it moves
-        boolean blocks = false;
+        boolean blocks = false, doors = false;
         for(int dx = -1; dx <= 0; dx++) {
-            for(int dz = -1; dz <= 0; dz++) blocks |= isLiquid(world, x + dx, y, z + dz);
+            for(int dz = -1; dz <= 0; dz++) {
+                IBlockState state = world.getBlockState(POS.setPos(x + dx, y, z + dz));
+                blocks |= state.getMaterial().isLiquid();
+                doors |= Terrain.isDoor(state);
+            }
+        }
+        if(doors) {
+            // Only the water blocks on this side of the door count
+            blocks = false;
+            for(int dx = -1; dx <= 0; dx++) {
+                for(int dz = -1; dz <= 0; dz++) blocks |= isLiquid(world, x + dx, y, z + dz) && !FluidicWater.apartByDoor(world, cell, x + dx, z + dz);
+            }
         }
         float sum = 0.0F;
         int count = 0, columns = 0;
         for(int dx = -1; dx <= 0; dx++) {
             for(int dz = -1; dz <= 0; dz++) {
                 float s;
+                // Water across the closed side of a door has its own surface
+                if(doors && FluidicWater.apartByDoor(world, cell, x + dx, z + dz)) continue;
                 if(isLiquid(world, x + dx, y, z + dz)) s = liquidHeight(world, x + dx, y, z + dz);
                 else if(blocks && ClientWaterCache.height(x + dx, y, z + dz) > 0) continue;
                 else s = surface(world, x + dx, y, z + dz);

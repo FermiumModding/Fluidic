@@ -78,7 +78,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         else if(FluidicWater.generating == 0 && !FluidicWater.placing) neighborChanged(world, pos, state);
     }
 
-    static void neighborChanged(World world, BlockPos pos, IBlockState state) {
+    public static void neighborChanged(World world, BlockPos pos, IBlockState state) {
         WaterSimulation simulation = SimManager.get(world);
         if(simulation == null) return;
         // Water Fluidlogged API keeps inside a block was just placed or changed there without the block changing, the

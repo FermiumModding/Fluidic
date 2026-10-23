@@ -16,6 +16,8 @@ import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 
+import javax.annotation.Nullable;
+
 /**
  * Vanilla water blocks replaced by Fluidic. Levels follow vanilla, so other code reading water keeps working:
  * LEVEL 0 is a full block, 1 to 7 are partly filled blocks from 7/8 down to 1/8, and 8 to 15 (vanilla's falling
@@ -188,7 +190,15 @@ public final class FluidicWater {
     public static float cornerHeight(IBlockAccess world, BlockPos corner) {
         BlockPos rendering = RENDERING.get();
         if(rendering != null && renderHeight(world, rendering) >= 1.0F) return 1.0F;
-        return surfaceCorner(world, corner);
+        if(rendering != null) {
+            // Water inside a door, drawn by the chunks, is level with the water on its open side, see WaterRenderer
+            EnumFacing door = Terrain.doorSide(world, rendering, world.getBlockState(rendering));
+            if(door == EnumFacing.WEST && corner.getX() == rendering.getX()) corner = corner.east();
+            else if(door == EnumFacing.EAST && corner.getX() == rendering.getX() + 1) corner = corner.west();
+            else if(door == EnumFacing.NORTH && corner.getZ() == rendering.getZ()) corner = corner.south();
+            else if(door == EnumFacing.SOUTH && corner.getZ() == rendering.getZ() + 1) corner = corner.north();
+        }
+        return surfaceCorner(world, corner, rendering);
     }
 
     /** Whether water beside a block is drawn reaching into it up to the block, like a glass pane, see Terrain.isThin */
@@ -201,22 +211,61 @@ public final class FluidicWater {
      * the block's own top, without depending on which block is being drawn.
      */
     public static float edgeHeight(IBlockAccess world, BlockPos water, BlockPos corner) {
-        return renderHeight(world, water) >= 1.0F ? 1.0F : surfaceCorner(world, corner);
+        return renderHeight(world, water) >= 1.0F ? 1.0F : surfaceCorner(world, corner, water);
     }
 
-    /** Height of the still surface at a corner, as water that does not continue up draws it */
-    private static float surfaceCorner(IBlockAccess world, BlockPos corner) {
+    /**
+     * Whether a door keeps the water at from apart from the water in the block at (x, from's y, z) beside it, or
+     * diagonally beside it when doors are in the way both ways around. Water can be inside a door on its open side,
+     * the water across its closed side is at its own height.
+     */
+    public static boolean apartByDoor(IBlockAccess world, BlockPos from, int x, int z) {
+        int fx = from.getX(), y = from.getY(), fz = from.getZ();
+        if(x == fx && z == fz) return false;
+        if(x == fx || z == fz) return doorBetween(world, fx, y, fz, x, z);
+        return (doorBetween(world, fx, y, fz, x, fz) || doorBetween(world, x, y, fz, x, z))
+                && (doorBetween(world, fx, y, fz, fx, z) || doorBetween(world, fx, y, z, x, z));
+    }
+
+    /** Whether a door is between two blocks side by side, in either of them */
+    private static boolean doorBetween(IBlockAccess world, int ax, int y, int az, int bx, int bz) {
+        EnumFacing toB = bx > ax ? EnumFacing.EAST : bx < ax ? EnumFacing.WEST : bz > az ? EnumFacing.SOUTH : EnumFacing.NORTH;
+        return doorSide(world, ax, y, az) == toB || doorSide(world, bx, y, bz) == toB.getOpposite();
+    }
+
+    @Nullable
+    private static EnumFacing doorSide(IBlockAccess world, int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        return Terrain.doorSide(world, pos, world.getBlockState(pos));
+    }
+
+    /**
+     * Height of the still surface at a corner, as water that does not continue up draws it. Water a door keeps apart
+     * from the water at from, the block being drawn, is left out, each side of a door has its own surface.
+     */
+    private static float surfaceCorner(IBlockAccess world, BlockPos corner, @Nullable BlockPos from) {
         // Simulated water moves all the time but water blocks are only redrawn when it appears or vanishes beside
         // them. Corners touching a water block leave it out, so the shared corner never goes stale and opens a gap.
-        boolean blocks = false;
+        boolean blocks = false, doors = false;
         for(int j = 0; j < 4; j++) {
-            blocks |= world.getBlockState(corner.add(-(j & 1), 0, -(j >> 1 & 1))).getMaterial().isLiquid();
+            IBlockState state = world.getBlockState(corner.add(-(j & 1), 0, -(j >> 1 & 1)));
+            blocks |= state.getMaterial().isLiquid();
+            doors |= Terrain.isDoor(state);
+        }
+        if(doors && from != null) {
+            // Only the water blocks on this side of the door count
+            blocks = false;
+            for(int j = 0; j < 4; j++) {
+                BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
+                blocks |= world.getBlockState(cell).getMaterial().isLiquid() && !apartByDoor(world, from, cell.getX(), cell.getZ());
+            }
         }
         float sum = 0.0F;
         int count = 0;
         boolean column = false;
         for(int j = 0; j < 4; j++) {
             BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
+            if(doors && from != null && apartByDoor(world, from, cell.getX(), cell.getZ())) continue;
             if(blocks && !world.getBlockState(cell).getMaterial().isLiquid() && simHeight(cell) > 0) continue;
             float height = renderHeight(world, cell);
             if(height >= 1.0F) {
@@ -252,6 +301,6 @@ public final class FluidicWater {
         if(world.getBlockState(offset).getMaterial() != Material.WATER && simHeight(offset) == 0) return y;
         float beside = renderHeight(world, offset);
         if(beside <= 0.0F || beside >= 1.0F) return y;
-        return y + surfaceCorner(world, new BlockPos(Math.round(x), pos.getY(), Math.round(z)));
+        return y + surfaceCorner(world, new BlockPos(Math.round(x), pos.getY(), Math.round(z)), pos);
     }
 }

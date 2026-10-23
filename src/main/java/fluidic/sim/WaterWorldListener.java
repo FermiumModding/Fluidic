@@ -1,12 +1,15 @@
 package fluidic.sim;
 
+import fluidic.block.BlockFluidicWater;
 import fluidic.block.FluidicWater;
 import fluidic.block.LilyPads;
 import fluidic.compat.FluidloggedCompat;
+import net.minecraft.block.BlockDoor;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.SoundCategory;
 import net.minecraft.util.SoundEvent;
 import net.minecraft.util.math.BlockPos;
@@ -35,6 +38,25 @@ final class WaterWorldListener implements IWorldEventListener {
         // reaches catch up with their next terrain refresh.
         if(FluidicWater.generating > 0) return;
         if(!FluidicWater.placing && FluidicWater.isWater(oldState) && !FluidicWater.isWater(newState)) displaced(world, pos, oldState, newState);
+        if(Terrain.isDoor(oldState) || Terrain.isDoor(newState)) {
+            // A door opening only changes its lower half, the upper half turns with it. The old state no longer tells
+            // the door's old side, the world holds the new one already, so both halves are set again.
+            simulation.setTerrain(pos, Terrain.classify(world, pos, newState));
+            BlockPos other = newState.getBlock() instanceof BlockDoor && newState.getValue(BlockDoor.HALF) == BlockDoor.EnumDoorHalf.UPPER
+                    || oldState.getBlock() instanceof BlockDoor && oldState.getValue(BlockDoor.HALF) == BlockDoor.EnumDoorHalf.UPPER ? pos.down() : pos.up();
+            if(world.isBlockLoaded(other)) simulation.setTerrain(other, Terrain.classify(world, other, world.getBlockState(other)));
+            // Doors open and close without updating their neighbours, settled water beside them would not notice
+            // that it can flow through now
+            for(BlockPos half : new BlockPos[] {pos, other}) {
+                for(EnumFacing facing : EnumFacing.VALUES) {
+                    BlockPos beside = half.offset(facing);
+                    if(!world.isBlockLoaded(beside)) continue;
+                    IBlockState water = world.getBlockState(beside);
+                    if(FluidicWater.isWater(water)) BlockFluidicWater.neighborChanged(world, beside, water);
+                }
+            }
+            return;
+        }
         byte code = Terrain.classify(world, pos, newState);
         if(code != Terrain.classify(world, pos, oldState)) simulation.setTerrain(pos, code);
     }
@@ -51,7 +73,7 @@ final class WaterWorldListener implements IWorldEventListener {
         if(FluidloggedCompat.waterLevel(world, pos) > 0) return;
         if(FluidicWater.isReservoir(world, pos, water)) return;
         int amount = FluidicWater.level(water) * Water.UNIT;
-        if(WaterSection.holds(Terrain.classify(block))) {
+        if(WaterSection.holds(Terrain.classify(block)) || Terrain.isDoor(block)) {
             simulation.addWater(pos, amount);
             return;
         }

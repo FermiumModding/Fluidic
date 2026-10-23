@@ -49,6 +49,11 @@ final class WaterSection {
     static final byte WATERLOGGABLE = 12;
     /** A drain, takes in water like a sponge but never fills, see fluidic.block.BlockDrain */
     static final byte DRAIN = 13;
+    /**
+     * Doors, DOOR + the side the door blocks less NORTH, so four codes. Water flows in and through them like a ladder,
+     * but never across the side the door is on, so a closed door holds water back and an open one lets it pass.
+     */
+    static final byte DOOR = 14;
     /** Water a sponge soaks up per side and step */
     private static final int SPONGE_RATE = Water.UNIT / 2;
 
@@ -56,8 +61,8 @@ final class WaterSection {
     static final int RESERVOIR_FLOW = Water.FULL / 4;
     private static final int FLOW_SINK = 8;
     private static final int FLOW_SOURCE = 16;
-    /** Settled water block, SETTLED + level (1-16) */
-    static final byte SETTLED = 16;
+    /** Settled water block, SETTLED + level (1-8) */
+    static final byte SETTLED = 20;
 
     // Pseudo codes for neighbours that have no usable terrain
     static final int MISSING = -1;
@@ -318,9 +323,18 @@ final class WaterSection {
         return isOpen(code) || code == POROUS;
     }
 
+    static boolean isDoor(int code) {
+        return code >= DOOR && code < DOOR + 4;
+    }
+
+    /** Whether water in or beside a cell with this code cannot cross its side in direction dir, the side of a door */
+    static boolean blocksSide(int code, int dir) {
+        return isDoor(code) && dir == code - DOOR + Water.NORTH;
+    }
+
     /** Whether water can flow freely into a cell with this terrain code */
     static boolean isOpen(int code) {
-        return code == OPEN || code == WASHABLE || code == PERMEABLE || code == WATERLOGGABLE;
+        return code == OPEN || code == WASHABLE || code == PERMEABLE || code == WATERLOGGABLE || isDoor(code);
     }
 
     static int codeOf(WaterSection s, int i) {
@@ -445,6 +459,8 @@ final class WaterSection {
             ns = neighborSection(i, dir);
             ni = neighborIndex(i, dir);
             code = codeOf(ns, ni);
+            // Nothing crosses the side a door is on, of this cell or the one beside it
+            if(blocksSide(terrain[i], dir) || blocksSide(code, dir ^ 1)) code = SOLID;
             // Leaves only take water from the side when they hold some already or this water is full, like leaves under
             // the surface of a pool. Otherwise thin water would creep through tree tops.
             if(isOpen(code) || code == POROUS && (ns.mass[ni] > 0 || r0 >= Water.FULL - Water.SPREAD_DIFF)) {
@@ -560,6 +576,7 @@ final class WaterSection {
             WaterSection ns = neighborSection(i, dir);
             int ni = neighborIndex(i, dir);
             int code = codeOf(ns, ni);
+            if(dir >= Water.NORTH && (blocksSide(terrain[i], dir) || blocksSide(code, dir ^ 1))) continue;
             if(code == RESERVOIR) addSource(i, RESERVOIR_FLOW);
             else if(code >= SETTLED && (dir == Water.UP && terrain[i] != WATERLOGGABLE || code - SETTLED >= 2)) wake(ns, ni);
             else if(ns != null && ns.dormant && ns.mass[ni] > 0) wakeSections.add(ns.key);

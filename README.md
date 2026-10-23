@@ -112,6 +112,8 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   mobs spawn in any water as in vanilla.
 * Fences, walls, doors and other partial blocks that block movement are solid unless listed as permeable
   in `Block Classifications`.
+* Doors not listed in `Block Classifications` let water flow through them, but never across the side the door is
+  on, open or closed: a closed door holds water back, and water in a door against its closed side stays in it.
 * Glass panes are `thin` (`ThinBlockWater`): they hold back water like a wall, and water beside one is drawn reaching
   into its block up to the glass, on each side separately, instead of stopping at the edge of the block. Other blocks
   can be listed as thin too, like walls: panes, walls, fences and blocks of other mods that join their neighbours
