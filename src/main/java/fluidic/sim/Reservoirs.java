@@ -5,6 +5,7 @@ import fluidic.block.FluidicWater;
 import fluidic.handlers.ForgeConfigHandler;
 import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
@@ -17,6 +18,7 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 import net.minecraft.world.biome.Biome;
+import net.minecraft.world.chunk.Chunk;
 import net.minecraftforge.common.BiomeDictionary;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
@@ -228,10 +230,22 @@ public final class Reservoirs {
         private final Memory remembered;
         private final long now;
         private final int surfaceY;
-        /** Every block looked at, they all share the answer */
-        private final LongArrayList seen = new LongArrayList();
-        private final LongOpenHashSet visited = new LongOpenHashSet();
+        /** Every water block looked at, they all share the answer */
+        private final LongArrayList seen = new LongArrayList(256);
+        /**
+         * Every block looked at, water or not, so none is read twice: a bit per block in 16x16x16 sections. A search
+         * stays in a section for many blocks, most checks are a bit test without a hash lookup.
+         */
+        private final Long2ObjectOpenHashMap<long[]> visited = new Long2ObjectOpenHashMap<>();
+        private long visitedKey = Long.MIN_VALUE;
+        private long[] visitedBits;
         private final BlockPos.MutableBlockPos cell = new BlockPos.MutableBlockPos();
+        /**
+         * The chunk blocks were last read from, null when it is not loaded. Blocks are read from their chunk directly:
+         * through the world, every block costs a lookup of its chunk to check it is loaded and another to read it.
+         */
+        private Chunk chunk;
+        private int chunkX = Integer.MIN_VALUE, chunkZ = Integer.MIN_VALUE;
         /** Ran into unloaded chunks, a no may be wrong */
         private boolean cutShort;
         /** What the search found, for {@link #describe} */
@@ -262,23 +276,40 @@ public final class Reservoirs {
         }
 
         private boolean search(BlockPos pos) {
+            int x = pos.getX(), z = pos.getZ();
             visit(pos.toLong());
             long surface = NONE;
             // Most water below sea level is open water, straight up is the fastest way to its surface
             int top = pos.getY();
             while(top < surfaceY) {
-                cell.setPos(pos.getX(), top + 1, pos.getZ());
-                if(remembered.isKnownReservoir(cell.toLong(), now)) return true;
-                if(!FluidicWater.isWater(world.getBlockState(cell))) break;
-                visit(cell.toLong());
+                long above = pack(x, top + 1, z);
+                if(remembered.isKnownReservoir(above, now)) return true;
+                if(!isWater(x, top + 1, z)) break;
+                visit(above);
                 top++;
             }
-            BlockPos column = new BlockPos(pos.getX(), top, pos.getZ());
-            if(isSurface(column)) surface = column.toLong();
-            if(surface == NONE) surface = findSurface(pos);
+            if(isSurface(x, top, z)) surface = pack(x, top, z);
+            if(surface == NONE) surface = findSurface(pos.toLong());
             surfaceFound = surface;
             // Water that never reaches the surface is a pool in a cave
             return surface != NONE && searchSurface(surface);
+        }
+
+        /** The loaded chunk a block is in, null if it is not loaded */
+        private Chunk chunk(int x, int z) {
+            int cx = x >> 4, cz = z >> 4;
+            if(cx != chunkX || cz != chunkZ) {
+                chunkX = cx;
+                chunkZ = cz;
+                chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
+            }
+            return chunk;
+        }
+
+        /** Whether a block in a loaded chunk is water, false when it is not loaded */
+        private boolean isWater(int x, int y, int z) {
+            Chunk at = chunk(x, z);
+            return at != null && FluidicWater.isWater(at.getBlockState(x, y, z));
         }
 
         /**
@@ -286,10 +317,27 @@ public final class Reservoirs {
          * open to the sky a little below it, so it fills up again. Water under a cave roof does not count, or a lake
          * in a cave below an ocean would fill up to sea level.
          */
-        private boolean isSurface(BlockPos at) {
-            if(at.getY() == surfaceY) return true;
-            if(at.getY() < surfaceY - MAX_LOWERED) return false;
-            return !FluidicWater.isWater(world.getBlockState(at.up())) && FluidicWater.isUnderSky(world, at.up());
+        private boolean isSurface(int x, int y, int z) {
+            if(y == surfaceY) return true;
+            if(y < surfaceY - MAX_LOWERED) return false;
+            return !isWater(x, y + 1, z) && FluidicWater.isUnderSky(world, cell.setPos(x, y + 1, z));
+        }
+
+        /** Same as BlockPos.toLong, without making a BlockPos */
+        private static long pack(int x, int y, int z) {
+            return ((long)x & 0x3FFFFFFL) << 38 | ((long)y & 0xFFFL) << 26 | ((long)z & 0x3FFFFFFL);
+        }
+
+        private static int unpackX(long packed) {
+            return (int)(packed >> 38);
+        }
+
+        private static int unpackY(long packed) {
+            return (int)(packed << 26 >> 52);
+        }
+
+        private static int unpackZ(long packed) {
+            return (int)(packed << 38 >> 38);
         }
 
         /**
@@ -297,11 +345,11 @@ public final class Reservoirs {
          * highest water is followed first: water under a block placed deep in the sea goes around it and straight up,
          * spreading evenly would fill a ball of water around it and stop long before the surface.
          */
-        private long findSurface(BlockPos pos) {
+        private long findSurface(long start) {
             LongArrayList[] levels = new LongArrayList[surfaceY + 1];
-            int top = pos.getY();
+            int top = unpackY(start);
             levels[top] = new LongArrayList();
-            levels[top].add(pos.toLong());
+            levels[top].add(start);
             int searched = 0;
             while(top >= 0) {
                 LongArrayList level = levels[top];
@@ -313,13 +361,13 @@ public final class Reservoirs {
                     cutShort = true;
                     return NONE;
                 }
-                BlockPos at = BlockPos.fromLong(level.removeLong(level.size() - 1));
+                long at = level.removeLong(level.size() - 1);
+                int ax = unpackX(at), ay = unpackY(at), az = unpackZ(at);
                 for(EnumFacing facing : FACINGS) {
-                    long next = water(at, facing);
+                    int x = ax + facing.getXOffset(), y = ay + facing.getYOffset(), z = az + facing.getZOffset();
+                    long next = water(x, y, z);
                     if(next == NONE) continue;
-                    BlockPos found = BlockPos.fromLong(next);
-                    if(isSurface(found)) return next;
-                    int y = found.getY();
+                    if(isSurface(x, y, z)) return next;
                     if(levels[y] == null) levels[y] = new LongArrayList();
                     levels[y].add(next);
                     top = Math.max(top, y);
@@ -335,26 +383,28 @@ public final class Reservoirs {
          * is followed up and down from the one beside it.
          */
         private boolean searchSurface(long start) {
-            LongArrayList queue = new LongArrayList();
-            LongOpenHashSet columns = new LongOpenHashSet();
-            BlockPos first = BlockPos.fromLong(start);
-            columns.add(column(first.getX(), first.getZ()));
+            LongArrayList queue = new LongArrayList(MIN_SURFACE * 2);
+            LongOpenHashSet columns = new LongOpenHashSet(MIN_SURFACE * 4);
+            columns.add(column(unpackX(start), unpackZ(start)));
             visit(start);
             queue.add(start);
             boolean biome = false;
             for(int n = 0; n < queue.size(); n++) {
                 long packed = queue.getLong(n);
                 if(remembered.isKnownReservoir(packed, now)) return true;
-                BlockPos at = BlockPos.fromLong(packed);
-                if(!biome && isReservoirBiome(world.getBiome(at))) biome = true;
+                int ax = unpackX(packed), ay = unpackY(packed), az = unpackZ(packed);
+                if(!biome) {
+                    Chunk at = chunk(ax, az);
+                    biome = at != null && isReservoirBiome(at.getBiome(cell.setPos(ax, ay, az), world.getBiomeProvider()));
+                }
                 columnsSearched = queue.size();
                 biomeFound = biome;
                 if(biome && queue.size() >= MIN_SURFACE) return true;
                 if(queue.size() >= MAX_SURFACE_SEARCH) return false;
                 for(EnumFacing facing : EnumFacing.HORIZONTALS) {
-                    int x = at.getX() + facing.getXOffset(), z = at.getZ() + facing.getZOffset();
+                    int x = ax + facing.getXOffset(), z = az + facing.getZOffset();
                     if(!columns.add(column(x, z))) continue;
-                    long top = topBeside(x, at.getY(), z);
+                    long top = topBeside(x, ay, z);
                     if(top != NONE) {
                         visit(top);
                         queue.add(top);
@@ -366,21 +416,22 @@ public final class Reservoirs {
 
         /** Top of the water in a column next to a surface block at the given height, NONE if there is none near it */
         private long topBeside(int x, int y, int z) {
-            cell.setPos(x, y, z);
-            if(!world.isBlockLoaded(cell)) {
+            Chunk at = chunk(x, z);
+            if(at == null) {
                 cutShort = true;
                 return NONE;
             }
-            if(FluidicWater.isWater(world.getBlockState(cell))) {
+            // The column is in one chunk
+            if(FluidicWater.isWater(at.getBlockState(x, y, z))) {
                 // Rises to the top of the water here
-                while(cell.getY() < surfaceY && FluidicWater.isWater(world.getBlockState(cell.up()))) cell.setY(cell.getY() + 1);
-                return cell.toLong();
+                while(y < surfaceY && FluidicWater.isWater(at.getBlockState(x, y + 1, z))) y++;
+                return pack(x, y, z);
             }
             // Lower here, the surface steps down where thin water on top ran out
-            for(int down = 0; down < MAX_STEP_DOWN && cell.getY() > 0; down++) {
-                if(world.getBlockState(cell).getMaterial().blocksMovement()) return NONE;
-                cell.setY(cell.getY() - 1);
-                if(FluidicWater.isWater(world.getBlockState(cell))) return cell.getY() < surfaceY - MAX_LOWERED ? NONE : cell.toLong();
+            for(int down = 0; down < MAX_STEP_DOWN && y > 0; down++) {
+                if(at.getBlockState(x, y, z).getMaterial().blocksMovement()) return NONE;
+                y--;
+                if(FluidicWater.isWater(at.getBlockState(x, y, z))) return y < surfaceY - MAX_LOWERED ? NONE : pack(x, y, z);
             }
             return NONE;
         }
@@ -389,23 +440,43 @@ public final class Reservoirs {
             return ((long)x << 32) | (z & 0xFFFFFFFFL);
         }
 
-        /** The unvisited water block beside a block, at or below the surface layer, marked visited, or NONE */
-        private long water(BlockPos at, EnumFacing facing) {
-            cell.setPos(at.getX() + facing.getXOffset(), at.getY() + facing.getYOffset(), at.getZ() + facing.getZOffset());
-            if(cell.getY() < 0 || cell.getY() > surfaceY) return NONE;
-            long next = cell.toLong();
-            if(visited.contains(next)) return NONE;
-            if(!world.isBlockLoaded(cell)) {
+        /**
+         * The water block at a position not looked at yet, at or below the surface layer, or NONE. Blocks that are not
+         * water are marked looked at too, they are not read again.
+         */
+        private long water(int x, int y, int z) {
+            if(y < 0 || y > surfaceY) return NONE;
+            if(!markVisited(x, y, z)) return NONE;
+            long next = pack(x, y, z);
+            Chunk at = chunk(x, z);
+            if(at == null) {
                 cutShort = true;
                 return NONE;
             }
-            if(!FluidicWater.isWater(world.getBlockState(cell))) return NONE;
-            visit(next);
+            if(!FluidicWater.isWater(at.getBlockState(x, y, z))) return NONE;
+            seen.add(next);
             return next;
         }
 
         private void visit(long packed) {
-            if(visited.add(packed)) seen.add(packed);
+            if(markVisited(unpackX(packed), unpackY(packed), unpackZ(packed))) seen.add(packed);
+        }
+
+        /** Marks a block looked at, false when it was already */
+        private boolean markVisited(int x, int y, int z) {
+            long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
+            long[] bits = visitedBits;
+            if(key != visitedKey) {
+                bits = visited.get(key);
+                if(bits == null) visited.put(key, bits = new long[64]);
+                visitedKey = key;
+                visitedBits = bits;
+            }
+            int i = Water.cellIndex(x & 15, y & 15, z & 15);
+            long mask = 1L << (i & 63);
+            if((bits[i >> 6] & mask) != 0) return false;
+            bits[i >> 6] |= mask;
+            return true;
         }
     }
 }
