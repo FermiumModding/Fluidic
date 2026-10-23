@@ -26,7 +26,6 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Converts world blocks into the terrain codes the simulation works on. Blocks listed in the Block Classifications
@@ -59,28 +58,103 @@ public final class Terrain {
 
     /** Parsed config, per block a class per metadata plus one for any metadata, built on first use */
     private static volatile Map<Block, byte[]> rules;
-    /** Final class per block state, states are unique objects so they can be keys */
-    private static final ConcurrentHashMap<IBlockState, Byte> CACHE = new ConcurrentHashMap<>();
+    /**
+     * Final class per block state, by the state object itself. A hash map of states would not do: states hash by their
+     * property values alone, so the states of every block without properties, and of blocks sharing property values,
+     * land in the same few buckets. States are unique objects, this table goes by their identity instead.
+     */
+    private static volatile StateTable cache = new StateTable(1 << 13);
 
     private Terrain() {}
 
     /** Drops the parsed config and cached classes, the next lookup parses the config again */
     public static void reload() {
         rules = null;
-        CACHE.clear();
+        cache = new StateTable(1 << 13);
     }
 
     /** Terrain code of a block state, without the position, so reservoir water counts as plain settled water */
     public static byte classify(IBlockState state) {
+        Block block = state.getBlock();
         if(FluidicWater.isWater(state)) return (byte)(WaterSection.SETTLED + FluidicWater.level(state));
-        if(state.getBlock() == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) return WaterSection.SPONGE;
-        if(state.getBlock() instanceof BlockDrain) return WaterSection.DRAIN;
-        Byte cached = CACHE.get(state);
-        if(cached != null) return cached;
+        if(block == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) return WaterSection.SPONGE;
+        if(block instanceof BlockDrain) return WaterSection.DRAIN;
+        StateTable table = cache;
+        int known = table.get(state);
+        if(known >= 0) return (byte)known;
         byte code = configured(state);
         if(code == UNSET) code = fallback(state);
-        CACHE.put(state, code);
+        table.put(state, code);
         return code;
+    }
+
+    /**
+     * Classes by block state identity, open addressing. Read from any thread without locking, written under the
+     * table's lock. A reader that sees a state before its class reads it as missing and works it out again.
+     */
+    private static final class StateTable {
+
+        /** Keys and classes + 1 side by side, replaced as a whole when the table grows */
+        private static final class Slots {
+            final Object[] keys;
+            final byte[] values;
+
+            Slots(int capacity) {
+                keys = new Object[capacity];
+                values = new byte[capacity];
+            }
+        }
+
+        private volatile Slots slots;
+        private int size;
+
+        StateTable(int capacity) {
+            slots = new Slots(capacity);
+        }
+
+        private static int slot(Object key, int mask) {
+            int h = System.identityHashCode(key);
+            // Spread the bits, identity hashes of objects made in a row are close
+            h ^= h >>> 16;
+            h *= 0x85EBCA6B;
+            return (h ^ h >>> 13) & mask;
+        }
+
+        /** The class of a state, -1 when it is not known yet */
+        int get(IBlockState state) {
+            Slots s = slots;
+            Object[] k = s.keys;
+            byte[] v = s.values;
+            int mask = k.length - 1;
+            for(int i = slot(state, mask); ; i = i + 1 & mask) {
+                Object at = k[i];
+                if(at == null) return -1;
+                if(at == state) return v[i] - 1;
+            }
+        }
+
+        synchronized void put(IBlockState state, byte code) {
+            if(get(state) >= 0) return;
+            if((size + 1) * 2 > slots.keys.length) grow();
+            insert(slots.keys, slots.values, state, (byte)(code + 1));
+            size++;
+        }
+
+        private static void insert(Object[] k, byte[] v, Object key, byte value) {
+            int mask = k.length - 1;
+            int i = slot(key, mask);
+            while(k[i] != null) i = i + 1 & mask;
+            // The class first, a reader that finds the key then finds its class
+            v[i] = value;
+            k[i] = key;
+        }
+
+        private void grow() {
+            Slots old = slots;
+            Slots grown = new Slots(old.keys.length * 2);
+            for(int i = 0; i < old.keys.length; i++) if(old.keys[i] != null) insert(grown.keys, grown.values, old.keys[i], old.values[i]);
+            slots = grown;
+        }
     }
 
     /** Terrain code of the block at a position, telling ocean and river reservoirs apart from other water */
