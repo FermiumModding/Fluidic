@@ -184,6 +184,11 @@ public class ForgeConfigHandler {
 		@Config.Name("Sponge Capacity")
 		@Config.RangeDouble(min = 0.125D, max = 1024.0D)
 		public double spongeCapacity = 16.0D;
+
+		@Config.Comment("Blocks of water a powered fountain pours out per second.")
+		@Config.Name("Fountain Output")
+		@Config.RangeDouble(min = 0.05D, max = 64.0D)
+		public double fountainOutput = 1.0D;
 	}
 
 	public static class ClientConfig {

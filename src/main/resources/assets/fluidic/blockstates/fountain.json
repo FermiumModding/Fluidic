@@ -1,0 +1,16 @@
+{
+  "variants": {
+    "facing=down,powered=false": { "model": "fluidic:fountain_vertical", "x": 180 },
+    "facing=up,powered=false": { "model": "fluidic:fountain_vertical" },
+    "facing=north,powered=false": { "model": "fluidic:fountain" },
+    "facing=south,powered=false": { "model": "fluidic:fountain", "y": 180 },
+    "facing=west,powered=false": { "model": "fluidic:fountain", "y": 270 },
+    "facing=east,powered=false": { "model": "fluidic:fountain", "y": 90 },
+    "facing=down,powered=true": { "model": "fluidic:fountain_vertical", "x": 180 },
+    "facing=up,powered=true": { "model": "fluidic:fountain_vertical" },
+    "facing=north,powered=true": { "model": "fluidic:fountain" },
+    "facing=south,powered=true": { "model": "fluidic:fountain", "y": 180 },
+    "facing=west,powered=true": { "model": "fluidic:fountain", "y": 270 },
+    "facing=east,powered=true": { "model": "fluidic:fountain", "y": 90 }
+  }
+}

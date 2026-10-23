@@ -1,0 +1,8 @@
+{
+  "parent": "block/cube_bottom_top",
+  "textures": {
+    "top": "blocks/iron_trapdoor",
+    "bottom": "blocks/stonebrick",
+    "side": "blocks/stonebrick"
+  }
+}

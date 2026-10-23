@@ -677,6 +677,8 @@ public final class WaterSimulation {
             int i = (int)(source >>> 32), amount = (int)source;
             WaterSection target = sections.get(cell >>> 12);
             int ti = (int)(cell & 0xFFF);
+            // A drain takes everything and never fills
+            if(target != null && target.state == WaterSection.STATE_READY && target.terrain[ti] == WaterSection.DRAIN) continue;
             boolean dry = target != null && target.state == WaterSection.STATE_READY && target.terrain[ti] == WaterSection.SPONGE;
             long pos = dry ? blockPos(target, ti) : 0L;
             int held = dry ? sponges.get(pos) : capacity;
@@ -1124,8 +1126,8 @@ public final class WaterSimulation {
         for(int dir = 0; dir < 6 && !wake; dir++) {
             int code = codes[dir];
             int nx = x + Water.DX[dir], ny = y + Water.DY[dir], nz = z + Water.DZ[dir];
-            // A dry sponge on any side soaks the water up
-            if(code == WaterSection.SPONGE) wake = true;
+            // A dry sponge or a drain on any side soaks the water up
+            if(code == WaterSection.SPONGE || code == WaterSection.DRAIN) wake = true;
             else if(dir == Water.DOWN) {
                 // Leaves below take water until they are full of it
                 wake = code == WaterSection.SINK || code == WaterSection.RESERVOIR

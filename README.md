@@ -62,6 +62,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   eighth at a time from the highest blocks, and only fills when there is a whole block to take, so no water
   is created and the vanilla infinite water source no longer works. Poured into water, a bucket adds a block
   of water on top of it.
+* **Fountains and drains**. Two blocks for building with water. A fountain faces the way it was placed, like a
+  dispenser, and while it gets a redstone signal it pours water out of its front, 1 block per second by default
+  (`Fountain Output`). It pours into the pool in front of it from the top. A drain takes in water touching it
+  like a sponge that never fills, pools drain into it.
 * **Lily pads**. Lily pads float on water more than half full, simulated water too, and follow the water
   level (`LilyPads`): water rising into a pad lifts it, and a pad whose water went down sinks to the new
   surface up to 4 blocks below. They only break when there is no water near enough.

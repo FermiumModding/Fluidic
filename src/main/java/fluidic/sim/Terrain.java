@@ -2,6 +2,7 @@ package fluidic.sim;
 
 import fluidic.Fluidic;
 import fluidic.handlers.ForgeConfigHandler;
+import fluidic.block.BlockDrain;
 import fluidic.block.FluidicWater;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockConcretePowder;
@@ -72,6 +73,7 @@ public final class Terrain {
     public static byte classify(IBlockState state) {
         if(FluidicWater.isWater(state)) return (byte)(WaterSection.SETTLED + FluidicWater.level(state));
         if(state.getBlock() == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) return WaterSection.SPONGE;
+        if(state.getBlock() instanceof BlockDrain) return WaterSection.DRAIN;
         Byte cached = CACHE.get(state);
         if(cached != null) return cached;
         byte code = configured(state);

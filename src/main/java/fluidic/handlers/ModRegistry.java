@@ -3,10 +3,13 @@ package fluidic.handlers;
 import fluidic.Fluidic;
 import fluidic.block.BlockFluidicFlowingWater;
 import fluidic.block.BlockFluidicWater;
+import fluidic.block.BlockDrain;
+import fluidic.block.BlockFountain;
 import fluidic.block.BlockLegacySettledWater;
 import net.minecraft.block.Block;
 import net.minecraft.init.Items;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemBucket;
 import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.event.RegistryEvent;
@@ -24,6 +27,8 @@ public class ModRegistry {
         /** Fluid of the legacy settled water block, only kept so that block still renders until it is converted */
         public static Fluid LEGACY_FLUID;
         public static BlockLegacySettledWater LEGACY_SETTLED_WATER;
+        public static BlockFountain FOUNTAIN;
+        public static BlockDrain DRAIN;
         private static BlockFluidicFlowingWater flowingWater;
 
         public static void init() {
@@ -45,6 +50,10 @@ public class ModRegistry {
                 event.getRegistry().register(flowingWater);
                 LEGACY_SETTLED_WATER = new BlockLegacySettledWater(LEGACY_FLUID);
                 event.getRegistry().register(LEGACY_SETTLED_WATER);
+                FOUNTAIN = new BlockFountain();
+                event.getRegistry().register(FOUNTAIN);
+                DRAIN = new BlockDrain();
+                event.getRegistry().register(DRAIN);
                 bindForgeWater(water);
         }
 
@@ -64,6 +73,8 @@ public class ModRegistry {
         @SubscribeEvent
         public static void registerItemEvent(RegistryEvent.Register<Item> event) {
                 ReflectionHelper.setPrivateValue(ItemBucket.class, (ItemBucket)Items.WATER_BUCKET, flowingWater, "containedBlock", "field_77876_a");
+                event.getRegistry().register(new ItemBlock(FOUNTAIN).setRegistryName(FOUNTAIN.getRegistryName()));
+                event.getRegistry().register(new ItemBlock(DRAIN).setRegistryName(DRAIN.getRegistryName()));
         }
 
         /** The Fluidic water bucket of earlier versions is a vanilla water bucket now */

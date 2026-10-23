@@ -47,6 +47,8 @@ final class WaterSection {
      * simulated inside it, but it is sealed top and bottom, so a roof of slabs does not leak.
      */
     static final byte WATERLOGGABLE = 12;
+    /** A drain, takes in water like a sponge but never fills, see fluidic.block.BlockDrain */
+    static final byte DRAIN = 13;
     /** Water a sponge soaks up per side and step */
     private static final int SPONGE_RATE = Water.UNIT / 2;
 
@@ -401,7 +403,7 @@ final class WaterSection {
             addFlow(i, Water.DOWN, r, true);
             return;
         }
-        else if(code == SPONGE) {
+        else if(code == SPONGE || code == DRAIN) {
             r -= soak(i, Water.DOWN, Math.min(r, SPONGE_RATE));
         }
         else if(code >= SETTLED) {
@@ -469,7 +471,7 @@ final class WaterSection {
                 if(r0 < Water.FULL - Water.SPREAD_DIFF) addSource(i, Math.min(RESERVOIR_FLOW, Water.FULL - r0));
                 merges.add(i);
             }
-            else if(code == SPONGE) {
+            else if(code == SPONGE || code == DRAIN) {
                 int f = Math.min(Math.min(SPONGE_RATE, Math.max(1, r0 / 4)), r - out);
                 if(f > 0) out += soak(i, dir, f);
             }
@@ -509,8 +511,8 @@ final class WaterSection {
             r -= f;
         }
 
-        // A sponge above soaks water up too
-        if(upCode == SPONGE && r > 0) r -= soak(i, Water.UP, Math.min(r, SPONGE_RATE));
+        // A sponge or drain above soaks water up too
+        if((upCode == SPONGE || upCode == DRAIN) && r > 0) r -= soak(i, Water.UP, Math.min(r, SPONGE_RATE));
 
         // Pressure pushes compressed water up
         if(isOpen(upCode) && r > Water.FULL) {
