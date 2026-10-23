@@ -78,6 +78,7 @@ public final class ClientWaterCache {
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if(event.phase != TickEvent.Phase.END) return;
         ticks++;
+        ChunkWater.update();
         if(DEFERRED.isEmpty()) return;
         if(Minecraft.getMinecraft().world == null) {
             DEFERRED.clear();
@@ -104,11 +105,14 @@ public final class ClientWaterCache {
         // Work out what changed, so only what depends on it is redrawn
         int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
         int borders = 0;
+        int x0 = 16, y0 = 16, z0 = 16, x1 = -1, y1 = -1, z1 = -1;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for(int i = 0; i < 4096; i++) {
             int a = old == null ? 0 : old[i] & 255, b = heights == null ? 0 : heights[i] & 255;
             if(a == b) continue;
             int x = i & 15, y = i >> 8, z = (i >> 4) & 15;
+            x0 = Math.min(x0, x); y0 = Math.min(y0, y); z0 = Math.min(z0, z);
+            x1 = Math.max(x1, x); y1 = Math.max(y1, y); z1 = Math.max(z1, z);
             // Cells on the edge are drawn against the sections beside them, diagonal ones too since corners are shared
             if(x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15) borders |= WaterRenderer.around(x, y, z);
             // Settled water culls its faces against simulated water, redraw it when water appears or vanishes
@@ -117,6 +121,8 @@ public final class ClientWaterCache {
             }
         }
         WaterRenderer.markDirty(key, borders);
+        // Drawn by the chunks, the changed blocks and those beside them are redrawn
+        if(ChunkWater.isActive() && x1 >= 0) ChunkWater.redraw(ox + x0, oy + y0, oz + z0, ox + x1, oy + y1, oz + z1);
     }
 
     private static boolean besideSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {

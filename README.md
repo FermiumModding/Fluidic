@@ -53,7 +53,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   thunders or below sea level, though soil keeps soaking water up. Lakes and oceans keep their water.
 * **Client rendering** (`WaterRenderer`). The server sends deflated per-cell heights of changed sections
   to players watching the chunk. The client compiles each section into a display list, with smoothed
-  corner heights, and draws it after the world.
+  corner heights, and draws it after the world. Shader packs only shade what the chunks draw, so while an
+  OptiFine shader pack is in use (`Draw Simulated Water In Chunks` in the client config) simulated water is
+  drawn by the chunks instead: while a chunk redraws, empty blocks holding simulated water read as water
+  blocks of the same level (`ChunkWater`). Water moving then makes its chunks redraw, which costs more.
 * **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Only full
   blocks can be scooped, so no water is created, and the vanilla infinite water source no longer works.
 * **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,

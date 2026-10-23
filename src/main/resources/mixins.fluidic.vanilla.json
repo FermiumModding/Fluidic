@@ -17,6 +17,7 @@
   ],
   "client": [
     "vanilla.BlockFluidRendererMixin",
+    "vanilla.ChunkCacheMixin",
     "vanilla.RenderChunkMixin"
   ],
   "injectors": {

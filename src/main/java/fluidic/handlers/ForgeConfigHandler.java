@@ -201,6 +201,22 @@ public class ForgeConfigHandler {
 		@Config.Name("Mesh Rebuilds Per Frame")
 		@Config.RangeInt(min = 1, max = 256)
 		public int meshRebuildsPerFrame = 24;
+
+		@Config.Comment({
+				"Draws simulated water as part of the chunks it is in, as water blocks, instead of separately. Shader packs",
+				"only shade what the chunks draw, so this is needed for them, but water moving makes its chunks redraw,",
+				"which costs more in busy weather.",
+				"  AUTO   - while an OptiFine shader pack is in use",
+				"  ALWAYS - always",
+				"  NEVER  - never"})
+		@Config.Name("Draw Simulated Water In Chunks")
+		public ChunkWaterMode chunkWater = ChunkWaterMode.AUTO;
+	}
+
+	public enum ChunkWaterMode {
+		AUTO,
+		ALWAYS,
+		NEVER
 	}
 
 	@Mod.EventBusSubscriber

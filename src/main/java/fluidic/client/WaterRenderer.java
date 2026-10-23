@@ -93,6 +93,15 @@ public final class WaterRenderer {
         URGENT.add(key);
     }
 
+    /** Drops every mesh and rebuilds them from the cache, when drawing switches between here and the chunks */
+    static void redrawAll() {
+        for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
+        DISPLAY_LISTS.clear();
+        URGENT.clear();
+        DIRTY.clear();
+        if(!ChunkWater.isActive()) for(long key : ClientWaterCache.keys()) DIRTY.add(key);
+    }
+
     static void clear() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
@@ -105,7 +114,8 @@ public final class WaterRenderer {
         Minecraft mc = Minecraft.getMinecraft();
         WorldClient world = mc.world;
         Entity view = mc.getRenderViewEntity();
-        if(world == null || view == null || !ForgeConfigHandler.client.renderWater) return;
+        // Drawn by the chunks themselves while ChunkWater is active
+        if(world == null || view == null || !ForgeConfigHandler.client.renderWater || ChunkWater.isActive()) return;
 
         still = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_still");
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
