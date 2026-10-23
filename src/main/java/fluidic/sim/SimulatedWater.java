@@ -113,12 +113,16 @@ public final class SimulatedWater {
 
     /**
      * Whether an entity's bounding box is in simulated water, pushing it along the current the way
-     * World.handleMaterialAcceleration does for flowing water blocks.
+     * World.handleMaterialAcceleration does for flowing water blocks. The current pushes in water of any depth, like
+     * vanilla flowing water carries items along a thin stream, being in water to swim takes more than half a block.
      */
     public static boolean handleEntity(Entity entity, AxisAlignedBB box) {
-        if(!isInWater(entity.world, box)) return false;
-        if(!entity.isPushedByWater()) return true;
-        Vec3d current = current(entity.world, box);
+        boolean inWater = isInWater(entity.world, box);
+        if(entity.isPushedByWater()) push(entity, current(entity.world, box));
+        return inWater;
+    }
+
+    private static void push(Entity entity, Vec3d current) {
         // Push as hard as vanilla flowing water on a clear slope, fading out on the small differences of a pool
         // that is still evening out
         double slope = Math.sqrt(current.x * current.x + current.z * current.z);
@@ -128,13 +132,13 @@ public final class SimulatedWater {
             entity.motionZ += current.z / slope * strength * 0.014D;
         }
         entity.motionY += current.y * 0.014D;
-        return true;
     }
 
     /**
      * How simulated water in a bounding box flows: the average slope of the water surface between wet cells in
      * blocks per block horizontally, and the share of cells falling freely as a negative y. Only slopes between
-     * wet cells count, water at the edge of a pool does not flow onto dry ground.
+     * wet cells count, water at the edge of a pool does not flow onto dry ground. Wet cells of any depth count, a
+     * thin stream carries things too.
      */
     public static Vec3d current(World world, AxisAlignedBB box) {
         int minX = MathHelper.floor(box.minX), maxX = MathHelper.ceil(box.maxX);
@@ -146,8 +150,7 @@ public final class SimulatedWater {
         for(int x = minX; x < maxX; x++) {
             for(int y = minY; y < maxY; y++) {
                 for(int z = minZ; z < maxZ; z++) {
-                    int height = height(world, x, y, z);
-                    if(!counts(world, x, y, z, height)) continue;
+                    if(height(world, x, y, z) == 0) continue;
                     cells++;
                     // Compare the surfaces of the columns so water below a sloped surface is pushed too
                     double surface = columnSurface(world, x, y, z);

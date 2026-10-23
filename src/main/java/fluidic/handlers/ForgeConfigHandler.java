@@ -24,9 +24,13 @@ public class ForgeConfigHandler {
 	@MixinConfig(name = Fluidic.MODID) //Needed on config classes that contain MixinToggles for those mixins to be added
 	public static class ServerConfig {
 
-		@Config.Comment("Entities swim in, splash into, are slowed by and drown in water that is still flowing, not only settled water, and it hydrates farmland. Needs FermiumBooter.")
+		@Config.Comment({
+				"Entities swim in, splash into, are slowed by and drown in water that is still flowing, not only settled",
+				"water, boats float on it, mobs path around it and fish bite in it, and it hydrates farmland, hardens",
+				"concrete powder and waters sugar cane. Turning it off only leaves these out, the rest of Fluidic's",
+				"water handling stays. Needs FermiumBooter."})
 		@Config.Name("Enable Flowing Water Entity Physics (Vanilla)")
-		@MixinConfig.MixinToggle(earlyMixin = "mixins.fluidic.vanilla.json", defaultValue = true)
+		@MixinConfig.MixinToggle(earlyMixin = "mixins.fluidic.entity.json", defaultValue = true)
 		public boolean enableFlowingWaterPhysics = true;
 
 		@Config.Comment("Runs the water simulation. Takes effect when a world loads.")

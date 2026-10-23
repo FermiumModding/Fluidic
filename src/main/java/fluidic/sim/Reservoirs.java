@@ -161,7 +161,9 @@ public final class Reservoirs {
         boolean wasWater = FluidicWater.isWater(oldState), isWater = FluidicWater.isWater(newState);
         if(wasWater == isWater) return;
         IBlockState other = wasWater ? newState : oldState;
-        if(other.getMaterial() == Material.AIR) return;
+        // Ice freezing on the sea and melting again, Frost Walker on every step, leaves the sea as it was
+        Material material = other.getMaterial();
+        if(material == Material.AIR || material == Material.ICE || material == Material.PACKED_ICE) return;
         Memory remembered = REMEMBERED.get(world);
         if(remembered != null) remembered.changed(pos.getX() >> 4, pos.getZ() >> 4, world.getTotalWorldTime());
     }

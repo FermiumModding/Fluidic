@@ -67,6 +67,12 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   eighth at a time from the highest blocks, and only fills when there is a whole block to take, so no water
   is created and the vanilla infinite water source no longer works. Poured into water, a bucket adds a block
   of water on top of it.
+* **Explosions**. Water still being simulated stops explosions like water blocks do (`ExplosionMixin`), so TNT
+  going off in it does not harm the blocks around it.
+* **Pumps, tanks and fluid containers** of other mods that use Forge's `FluidUtil.getFluidHandler` take and
+  add Fluidic water an eighth of a block (125 mB) at a time, partly filled blocks and water still being
+  simulated included (`WaterFluidHandlers`). Forge's own handler only takes and places whole source blocks.
+  Mods that check blocks themselves instead still only see water blocks.
 * **Fountains and drains**. Two blocks for building with water. A fountain faces the way it was placed, like a
   dispenser, and while it gets a redstone signal it pours water out of its front, 1 block per second by default
   (`Fountain Output`). It pours into the pool in front of it from the top. A drain takes in water touching it
@@ -94,8 +100,11 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 
 * Pressure comes from slight compression of deep water, so U-bends equalize slowly (minutes over long
   distances).
-* Entities swim in, are carried by and drown in water that is still moving through mixins loaded by
-  FermiumBooter. Without FermiumBooter, only settled water affects entities.
+* Mixins are loaded through FermiumBooter in two configs. `mixins.fluidic.vanilla.json` is always loaded by
+  the coremod (`FluidicPlugin`): rendering, buckets, lily pads, sponges, fluid handlers and world generation.
+  `mixins.fluidic.entity.json` is switched by `Enable Flowing Water Entity Physics`: entities swimming in,
+  being carried by and drowning in water that is still moving, boats, mobs pathing around it, fishing in it,
+  and farmland, concrete powder and sugar cane next to it. Turned off, only settled water affects these.
 * Fences, walls, doors and other partial blocks that block movement are solid unless listed as permeable
   in `Block Classifications`.
 

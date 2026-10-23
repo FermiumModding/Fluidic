@@ -144,7 +144,7 @@ public class ServerEventHandler {
             for(int k = 0; k < count; k++) {
                 if(raised[k] == levels[k]) continue;
                 IBlockState state = FluidicWater.state(raised[k]);
-                FluidicWater.placeQuietly(world, targets[k], state, 2);
+                FluidicWater.placeQuietly(world, targets[k], state, 3);
                 simulation.setTerrain(targets[k], Terrain.classify(state));
             }
             if(amount <= 0) return;

@@ -2,6 +2,7 @@ package fluidic;
 
 import java.util.Map;
 
+import fermiumbooter.FermiumRegistryAPI;
 import net.minecraftforge.fml.relauncher.CoreModManager;
 import org.apache.commons.lang3.StringUtils;
 import org.spongepowered.asm.launch.MixinBootstrap;
@@ -14,13 +15,10 @@ import org.spongepowered.asm.mixin.MixinEnvironment;
 public class FluidicPlugin implements IFMLLoadingPlugin {
 
 	public FluidicPlugin() {
-		//Replaced by @MixinConfig.MixinToggle:
-
-		//False for Vanilla/Coremod mixins, true for regular mod mixins
-		//FermiumRegistryAPI.enqueueMixin(false, "mixins.fluidic.vanilla.json");
-
-		//FermiumRegistryAPI.enqueueMixin(true, "mixins.fluidic.jei.json", () -> Loader.isModLoaded("jei"));
-		//--> Replaced by @MixinConfig.MixinToggle in ForgeConfigHandler. This way is still an option for more complicated conditions
+		// The water handling Fluidic needs to work at all: rendering, buckets, lily pads, sponges, fluid handlers and
+		// world generation. Always on. The entity physics of simulated water are a separate config, switched by
+		// @MixinConfig.MixinToggle in ForgeConfigHandler. False for Vanilla/Coremod mixins.
+		FermiumRegistryAPI.enqueueMixin(false, "mixins.fluidic.vanilla.json");
 	}
 
 	@Override

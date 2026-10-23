@@ -18,11 +18,15 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.init.Blocks;
+import net.minecraft.init.SoundEvents;
 import net.minecraft.util.EnumFacing;
+import net.minecraft.util.EnumParticleTypes;
 import net.minecraft.util.Mirror;
 import net.minecraft.util.Rotation;
+import net.minecraft.util.SoundCategory;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldServer;
 
 import javax.annotation.Nonnull;
 import java.util.Random;
@@ -87,6 +91,14 @@ public class BlockFountain extends Block {
     }
 
     private static void pour(World world, BlockPos front) {
+        if(world.provider.doesWaterVaporize()) {
+            // Water turns to steam here, with the hiss and smoke of a bucket emptied in the Nether, now and then
+            if(world.rand.nextInt(10) == 0 && world instanceof WorldServer) {
+                world.playSound(null, front, SoundEvents.BLOCK_FIRE_EXTINGUISH, SoundCategory.BLOCKS, 0.5F, 2.6F + (world.rand.nextFloat() - world.rand.nextFloat()) * 0.8F);
+                ((WorldServer)world).spawnParticle(EnumParticleTypes.SMOKE_LARGE, front.getX() + 0.5D, front.getY() + 0.5D, front.getZ() + 0.5D, 8, 0.3D, 0.3D, 0.3D, 0.0D);
+            }
+            return;
+        }
         if(!FluidicWater.isFinite(world)) {
             // Vanilla water is endless already, a source in front pours as much as it likes
             if(!world.isBlockLoaded(front)) return;

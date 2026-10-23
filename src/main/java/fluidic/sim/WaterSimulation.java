@@ -417,7 +417,6 @@ public final class WaterSimulation {
             int level = step.settleLevels.getInt(n);
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
-            int flags = 2;
             if(FluidicWater.isWater(state)) {
                 level = Math.max(level, FluidicWater.level(state));
             }
@@ -427,12 +426,12 @@ public final class WaterSimulation {
                 continue;
             }
             else if(state.getMaterial() != Material.AIR) {
-                // Washed away like vanilla water does to plants and torches, neighbours are updated so the other
-                // half of tall plants breaks too
+                // Washed away like vanilla water does to plants and torches, the update of the neighbours breaks the
+                // other half of tall plants too
                 state.getBlock().dropBlockAsItem(world, pos, state, 0);
-                flags = 3;
             }
-            place(pos, FluidicWater.state(level), flags);
+            // Neighbours are told, like observers, comparators and machines of other mods watching for water
+            place(pos, FluidicWater.state(level), 3);
             setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
         }
 
@@ -441,7 +440,7 @@ public final class WaterSimulation {
             if(!world.isBlockLoaded(pos) || !FluidicWater.isWater(world.getBlockState(pos))) continue;
             int level = step.relevelLevels.getInt(n);
             IBlockState state = level == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(level);
-            place(pos, state, 2);
+            place(pos, state, 3);
             setTerrain(pos, Terrain.classify(world, pos, state));
         }
 
@@ -488,6 +487,8 @@ public final class WaterSimulation {
     private void removeWoken() {
         for(int n = 0; n < removals.size(); n++) {
             BlockPos pos = BlockPos.fromLong(removals.getLong(n));
+            // Its water is still there as simulated water, the neighbours are not told: plants that need water beside them
+            // would check before the simulated water reaches them
             if(world.isBlockLoaded(pos) && FluidicWater.isWater(world.getBlockState(pos))) place(pos, Blocks.AIR.getDefaultState(), 2);
         }
         removals.clear();

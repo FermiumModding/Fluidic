@@ -2,6 +2,7 @@ package fluidic.sim;
 
 import fluidic.block.FluidicWater;
 import fluidic.block.LilyPads;
+import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
@@ -32,8 +33,28 @@ final class WaterWorldListener implements IWorldEventListener {
         // World generation places blocks by the thousand, mostly where nothing is simulated. Simulated sections it
         // reaches catch up with their next terrain refresh.
         if(FluidicWater.generating > 0) return;
+        if(!FluidicWater.placing && FluidicWater.isWater(oldState) && !FluidicWater.isWater(newState)) displaced(world, pos, oldState, newState);
         byte code = Terrain.classify(world, pos, newState);
         if(code != Terrain.classify(world, pos, oldState)) simulation.setTerrain(pos, code);
+    }
+
+    /**
+     * A block took the place of a water block: sand fell in, a piston pushed in, a player built into a pool. Water is
+     * finite, so it moves instead of vanishing: into the block when water can be in it, like stairs, or on top of the
+     * water above it. Water taken out on purpose, leaving air, is gone. Ice keeps the water, and the sea is endless.
+     */
+    private void displaced(World world, BlockPos pos, IBlockState water, IBlockState block) {
+        Material material = block.getMaterial();
+        if(material == Material.AIR || material == Material.ICE || material == Material.PACKED_ICE) return;
+        if(FluidicWater.isReservoir(world, pos, water)) return;
+        int amount = FluidicWater.level(water) * Water.UNIT;
+        if(WaterSection.holds(Terrain.classify(block))) {
+            simulation.addWater(pos, amount);
+            return;
+        }
+        BlockPos top = pos;
+        while(top.getY() < 255 && world.isBlockLoaded(top.up()) && FluidicWater.isWater(world.getBlockState(top.up()))) top = top.up();
+        simulation.addWater(top.up(), amount);
     }
 
     @Override

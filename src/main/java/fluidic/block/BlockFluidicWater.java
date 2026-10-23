@@ -12,7 +12,9 @@ import net.minecraft.block.BlockStaticLiquid;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLiving;
 import net.minecraft.init.Blocks;
+import net.minecraft.pathfinding.PathNodeType;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumParticleTypes;
 import net.minecraft.util.math.AxisAlignedBB;
@@ -24,6 +26,7 @@ import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -69,7 +72,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     public void neighborChanged(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Block block, @Nonnull BlockPos fromPos) {
         // Vanilla still water turns into flowing water, which spreads
         if(!FluidicWater.isFinite(world)) super.neighborChanged(state, world, pos, block, fromPos);
-        else if(FluidicWater.generating == 0) neighborChanged(world, pos, state);
+        // Water the simulation placed or levelled beside it, the simulation knows about it already
+        else if(FluidicWater.generating == 0 && !FluidicWater.placing) neighborChanged(world, pos, state);
     }
 
     static void neighborChanged(World world, BlockPos pos, IBlockState state) {
@@ -130,7 +134,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
             highest = FluidicWater.level(neighbor);
         }
         IBlockState dried = highest == 1 ? Blocks.AIR.getDefaultState() : FluidicWater.state(highest - 1);
-        FluidicWater.placeQuietly(world, target, dried, 2);
+        FluidicWater.placeQuietly(world, target, dried, 3);
         if(simulation != null) simulation.setTerrain(target, Terrain.classify(dried));
     }
 
@@ -185,7 +189,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
             if(levels.getInt(n) == even) continue;
             BlockPos cell = cells.get(n);
             IBlockState leveled = even == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(even);
-            FluidicWater.placeQuietly(world, cell, leveled, 2);
+            FluidicWater.placeQuietly(world, cell, leveled, 3);
             if(simulation != null) simulation.setTerrain(cell, Terrain.classify(leveled));
             changed = true;
         }
@@ -232,11 +236,55 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     // ---------------------------------------------------------------- entities
 
-    /** Fluidic water is still, vanilla would push entities along level differences and draw it flowing */
+    /**
+     * Water at rest is level and does not push. It pushes where it runs off, like vanilla flowing water: towards water
+     * at least two levels lower beside it, simulated water draining away included, and over an edge into water below.
+     * Vanilla pushes along every level difference, which would carry entities across the small steps rain leaves on a
+     * pool. Chunk drawing gets no flow, settled water is drawn still.
+     */
     @Override
     @Nonnull
-    protected Vec3d getFlow(@Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        return FluidicWater.isFinite(world) ? Vec3d.ZERO : super.getFlow(world, pos, state);
+    protected Vec3d getFlow(@Nonnull IBlockAccess access, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
+        if(!FluidicWater.isFinite(access)) return super.getFlow(access, pos, state);
+        if(!(access instanceof World)) return Vec3d.ZERO;
+        World world = (World)access;
+        float here = FluidicWater.level(state);
+        double x = 0.0D, z = 0.0D;
+        for(EnumFacing facing : EnumFacing.HORIZONTALS) {
+            BlockPos side = pos.offset(facing);
+            if(!world.isBlockLoaded(side)) continue;
+            float there = levelAt(world, side);
+            if(there < 0.0F) {
+                // An open edge, the water runs over it into water below, dry ground beside a pool takes nothing
+                if(world.getBlockState(side).getMaterial().blocksMovement()) continue;
+                float below = levelAt(world, side.down());
+                if(below < 0.0F) continue;
+                there = below - Water.LEVELS;
+            }
+            float drop = here - there;
+            if(drop < 2.0F) continue;
+            x += facing.getXOffset() * drop;
+            z += facing.getZOffset() * drop;
+        }
+        return x == 0.0D && z == 0.0D ? Vec3d.ZERO : new Vec3d(x, 0.0D, z).normalize();
+    }
+
+    /** Eighths of a block of water in a block, a water block or simulated water, -1 when there is none */
+    private static float levelAt(World world, BlockPos pos) {
+        IBlockState state = world.getBlockState(pos);
+        if(FluidicWater.isWater(state)) return FluidicWater.level(state);
+        int height = SimulatedWater.height(world, pos.getX(), pos.getY(), pos.getZ());
+        return height > 0 ? height * Water.LEVELS / 255.0F : -1.0F;
+    }
+
+    /**
+     * Mobs walk through puddles too shallow to swim in. Vanilla path finding takes any water for deep water, so after
+     * rain mobs would walk around every puddle or get stuck between them.
+     */
+    @Override
+    @Nullable
+    public PathNodeType getAiPathNodeType(@Nonnull IBlockState state, @Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nullable EntityLiving entity) {
+        return FluidicWater.isFinite(world) && FluidicWater.isPuddle(world, pos, state) ? PathNodeType.OPEN : null;
     }
 
     @Override
