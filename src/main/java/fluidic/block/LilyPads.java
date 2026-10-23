@@ -23,6 +23,8 @@ public final class LilyPads {
 
     /** Whether water at a position carries a lily pad on top of it: more than half a block of it */
     public static boolean floats(World world, BlockPos water) {
+        // Vanilla water carries lily pads the vanilla way, only full source blocks
+        if(!FluidicWater.isFinite(world)) return false;
         IBlockState state = world.getBlockState(water);
         if(FluidicWater.isWater(state)) return FluidicWater.level(state) > Water.LEVELS / 2;
         return state.getMaterial().isReplaceable() && SimulatedWater.height(world, water.getX(), water.getY(), water.getZ()) > 127;
@@ -59,6 +61,7 @@ public final class LilyPads {
      * below the top of their block. 0 when the water under it reaches the top.
      */
     public static double sink(IBlockAccess world, BlockPos pos) {
+        if(!FluidicWater.isFinite(world)) return 0.0D;
         BlockPos below = pos.down();
         float surface = FluidicWater.renderHeight(world, below);
         // The server knows simulated water from the simulation, the render helper only from what clients were sent
@@ -82,7 +85,7 @@ public final class LilyPads {
      * it goes down, so it looks again a second later, until it rests on a water block.
      */
     public static void watch(World world, BlockPos pos) {
-        if(!FluidicWater.isWater(world.getBlockState(pos.down()))) world.scheduleUpdate(pos, Blocks.WATERLILY, CHECK_TICKS);
+        if(FluidicWater.isFinite(world) && !FluidicWater.isWater(world.getBlockState(pos.down()))) world.scheduleUpdate(pos, Blocks.WATERLILY, CHECK_TICKS);
     }
 
     /** A water block under a lily pad changed, it looks whether it has to move */

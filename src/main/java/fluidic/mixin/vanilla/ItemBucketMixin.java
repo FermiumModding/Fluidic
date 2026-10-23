@@ -33,7 +33,7 @@ public abstract class ItemBucketMixin {
 
     @Inject(method = "tryPlaceContainedLiquid", at = @At("HEAD"), cancellable = true)
     private void fluidic_pourIntoWater(EntityPlayer player, World world, BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
-        if(containedBlock.getDefaultState().getMaterial() != Material.WATER || !FluidicWater.isWater(world.getBlockState(pos))) return;
+        if(containedBlock.getDefaultState().getMaterial() != Material.WATER || !FluidicWater.isFinite(world) || !FluidicWater.isWater(world.getBlockState(pos))) return;
         if(world.isRemote) {
             // The server plays the sound to everyone but the player, whose own client plays it, as vanilla does
             world.playSound(player, pos, SoundEvents.ITEM_BUCKET_EMPTY, SoundCategory.BLOCKS, 1.0F, 1.0F);

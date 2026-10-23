@@ -1,6 +1,7 @@
 package fluidic.mixin.vanilla;
 
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import fluidic.block.FluidicWater;
 import fluidic.sim.SimulatedWater;
 import net.minecraft.block.material.Material;
 import net.minecraft.entity.Entity;
@@ -58,7 +59,7 @@ public abstract class EntityMixin {
     @Inject(method = "handleWaterMovement", at = @At("RETURN"))
     private void fluidic_extinguishInFluidicWater(CallbackInfoReturnable<Boolean> cir) {
         Entity entity = (Entity)(Object)this;
-        if(world.isRemote || !entity.isBurning() || !SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) return;
+        if(world.isRemote || !entity.isBurning() || !FluidicWater.isFinite(world) || !SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) return;
         entity.playSound(SoundEvents.ENTITY_GENERIC_EXTINGUISH_FIRE, 0.7F, 1.6F + (world.rand.nextFloat() - world.rand.nextFloat()) * 0.4F);
         entity.extinguish();
     }
@@ -69,7 +70,7 @@ public abstract class EntityMixin {
      */
     @Inject(method = "isWet", at = @At("RETURN"), cancellable = true)
     private void fluidic_wetInFluidicWater(CallbackInfoReturnable<Boolean> cir) {
-        if(!cir.getReturnValueZ() && SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) cir.setReturnValue(true);
+        if(!cir.getReturnValueZ() && FluidicWater.isFinite(world) && SimulatedWater.isTouchingWater(world, getEntityBoundingBox())) cir.setReturnValue(true);
     }
 
     /** Drowning, air bubbles, the underwater overlay and the underwater checks of mobs */

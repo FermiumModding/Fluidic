@@ -2,12 +2,15 @@ package fluidic.handlers;
 
 import fluidic.Fluidic;
 import fluidic.block.FluidicWater;
+import fluidic.network.MessageVanillaDimensions;
+import fluidic.network.PacketHandler;
 import fluidic.sim.SimManager;
 import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
@@ -19,6 +22,7 @@ import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.Event;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.PlayerEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.util.Iterator;
@@ -29,8 +33,17 @@ public class ServerEventHandler {
 
     @SubscribeEvent
     public static void onWorldLoad(WorldEvent.Load event) {
-        if(event.getWorld() instanceof WorldServer && ForgeConfigHandler.server.enableSimulation) {
+        // Dimensions keeping vanilla water simulate nothing
+        if(event.getWorld() instanceof WorldServer && ForgeConfigHandler.server.enableSimulation && FluidicWater.isFinite(event.getWorld())) {
             SimManager.load((WorldServer)event.getWorld());
+        }
+    }
+
+    /** The player's client learns where water stays vanilla, it draws and handles water there the vanilla way */
+    @SubscribeEvent
+    public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
+        if(event.player instanceof EntityPlayerMP) {
+            PacketHandler.INSTANCE.sendTo(new MessageVanillaDimensions(ForgeConfigHandler.server.vanillaWaterDimensions.clone()), (EntityPlayerMP)event.player);
         }
     }
 

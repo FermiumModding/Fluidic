@@ -34,6 +34,15 @@ public class ForgeConfigHandler {
 		@Config.RequiresWorldRestart
 		public boolean enableSimulation = true;
 
+		@Config.Comment({
+				"Dimension ids that keep vanilla water: it flows and spreads endlessly from sources as in vanilla, nothing",
+				"is simulated, and the rest of Fluidic's water handling, like partly filled buckets and lily pads",
+				"following the water, is left out there too. Fountains place a water source while powered and drains",
+				"delete water touching them."})
+		@Config.Name("Vanilla Water Dimensions")
+		@Config.RequiresWorldRestart
+		public int[] vanillaWaterDimensions = {};
+
 		@Config.Comment("Threads used to step large simulations in parallel, 0 uses half the available processors.")
 		@Config.Name("Worker Threads")
 		@Config.RangeInt(min = 0, max = 64)

@@ -36,6 +36,7 @@ public abstract class EntityBoatMixin {
     @Inject(method = "checkInWater", at = @At("RETURN"), cancellable = true)
     private void fluidic_checkInFluidicWater(CallbackInfoReturnable<Boolean> cir) {
         Entity boat = (Entity)(Object)this;
+        if(!FluidicWater.isFinite(boat.world)) return;
         AxisAlignedBB box = boat.getEntityBoundingBox();
         int minY = MathHelper.floor(box.minY), maxY = MathHelper.ceil(box.minY + 0.001D);
         double level = SimulatedWater.surfaceLevel(boat.world, box, minY, maxY);
@@ -66,6 +67,7 @@ public abstract class EntityBoatMixin {
     @Inject(method = "getUnderwaterStatus", at = @At("RETURN"), cancellable = true)
     private void fluidic_underwaterStatus(CallbackInfoReturnable<EntityBoat.Status> cir) {
         Entity boat = (Entity)(Object)this;
+        if(!FluidicWater.isFinite(boat.world)) return;
         AxisAlignedBB box = boat.getEntityBoundingBox();
         double top = box.maxY + 0.001D;
         int minX = MathHelper.floor(box.minX), maxX = MathHelper.ceil(box.maxX);
@@ -95,6 +97,7 @@ public abstract class EntityBoatMixin {
     @Inject(method = "getWaterLevelAbove", at = @At("RETURN"), cancellable = true)
     private void fluidic_simulatedWaterLevelAbove(CallbackInfoReturnable<Float> cir) {
         Entity boat = (Entity)(Object)this;
+        if(!FluidicWater.isFinite(boat.world)) return;
         AxisAlignedBB box = boat.getEntityBoundingBox();
         float level = SimulatedWater.levelAbove(boat.world, box, MathHelper.floor(box.maxY), MathHelper.ceil(box.maxY - lastYd));
         if(level > cir.getReturnValueF()) cir.setReturnValue(level);

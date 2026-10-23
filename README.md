@@ -71,6 +71,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   dispenser, and while it gets a redstone signal it pours water out of its front, 1 block per second by default
   (`Fountain Output`). It pours into the pool in front of it from the top. A drain takes in water touching it
   like a sponge that never fills, pools drain into it.
+* **Vanilla water dimensions**. Dimensions listed in `Vanilla Water Dimensions` keep vanilla water: nothing is
+  simulated, water flows and makes new sources as in vanilla, and buckets, lily pads, boats and rendering behave
+  the vanilla way. Clients learn the list when they join. A powered fountain there places a water source in front
+  of it, removed again when the signal stops, and a drain deletes the water touching it.
 * **Lily pads**. Lily pads float on water more than half full, simulated water too, and follow the water
   level (`LilyPads`): water rising into a pad lifts it, and a pad whose water went down sinks to the new
   surface up to 4 blocks below. They only break when there is no water near enough.

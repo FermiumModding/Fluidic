@@ -53,6 +53,24 @@ public final class FluidicWater {
         }
     }
 
+    /** Dimensions keeping vanilla water on the server the client is connected to, sent when it joins */
+    public static volatile int[] clientVanillaDimensions = new int[0];
+    /** Whether the client's current world keeps vanilla water, for block lookups that come without the world */
+    public static volatile boolean clientVanilla;
+
+    /** Whether water in a world is Fluidic's finite water, false in the dimensions the config gives vanilla water */
+    public static boolean isFinite(World world) {
+        int dimension = world.provider.getDimension();
+        int[] vanilla = world.isRemote ? clientVanillaDimensions : ForgeConfigHandler.server.vanillaWaterDimensions;
+        for(int id : vanilla) if(id == dimension) return false;
+        return true;
+    }
+
+    /** Same for a block access, outside of a world it is a chunk cache the client draws its chunks from */
+    public static boolean isFinite(IBlockAccess world) {
+        return world instanceof World ? isFinite((World)world) : !clientVanilla;
+    }
+
     public static boolean isWater(IBlockState state) {
         return state.getBlock() == Blocks.WATER || state.getBlock() == Blocks.FLOWING_WATER;
     }

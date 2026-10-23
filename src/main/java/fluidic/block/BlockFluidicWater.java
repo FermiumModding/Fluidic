@@ -55,6 +55,11 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     @Override
     public void onBlockAdded(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
+        // Vanilla still water, mixing with lava
+        if(!FluidicWater.isFinite(world)) {
+            super.onBlockAdded(world, pos, state);
+            return;
+        }
         // Water placed by anything but the simulation, like a bucket or melting ice, may have to flow. Not water placed by
         // world generation, see FluidicWater.generating.
         if(!FluidicWater.placing && FluidicWater.generating == 0) neighborChanged(world, pos, state);
@@ -62,7 +67,9 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     @Override
     public void neighborChanged(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Block block, @Nonnull BlockPos fromPos) {
-        if(FluidicWater.generating == 0) neighborChanged(world, pos, state);
+        // Vanilla still water turns into flowing water, which spreads
+        if(!FluidicWater.isFinite(world)) super.neighborChanged(state, world, pos, block, fromPos);
+        else if(FluidicWater.generating == 0) neighborChanged(world, pos, state);
     }
 
     static void neighborChanged(World world, BlockPos pos, IBlockState state) {
@@ -72,12 +79,14 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     @Override
     public void updateTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
+        if(!FluidicWater.isFinite(world)) super.updateTick(world, pos, state, rand);
     }
 
     /** The surface of small bodies of still water evaporates, faster in direct sun, and soaks into soil */
     @Override
     public void randomTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
-        if(world.isRemote) return;
+        // Vanilla still water does nothing on random ticks
+        if(world.isRemote || !FluidicWater.isFinite(world)) return;
         int level = FluidicWater.level(state);
         boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid();
         // A full block under more water, the inside of a lake or the sea, neither moves nor dries up. Most random
@@ -227,24 +236,24 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     @Override
     @Nonnull
     protected Vec3d getFlow(@Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        return Vec3d.ZERO;
+        return FluidicWater.isFinite(world) ? Vec3d.ZERO : super.getFlow(world, pos, state);
     }
 
     @Override
     public Boolean isEntityInsideMaterial(IBlockAccess world, BlockPos pos, IBlockState state, Entity entity, double yToTest, Material material, boolean testingHead) {
         // Eyes go under the surface at any depth, swimming needs more than half a block
-        if(material == Material.WATER && !testingHead && FluidicWater.isPuddle(world, pos, state)) return false;
+        if(material == Material.WATER && !testingHead && FluidicWater.isFinite(world) && FluidicWater.isPuddle(world, pos, state)) return false;
         return null;
     }
 
     @Override
     public Boolean isAABBInsideMaterial(World world, BlockPos pos, AxisAlignedBB boundingBox, Material material) {
-        return material == Material.WATER && FluidicWater.isPuddle(world, pos, world.getBlockState(pos)) ? false : null;
+        return material == Material.WATER && FluidicWater.isFinite(world) && FluidicWater.isPuddle(world, pos, world.getBlockState(pos)) ? false : null;
     }
 
     @Override
     public Boolean isAABBInsideLiquid(World world, BlockPos pos, AxisAlignedBB boundingBox) {
-        return FluidicWater.isPuddle(world, pos, world.getBlockState(pos)) ? false : null;
+        return FluidicWater.isFinite(world) && FluidicWater.isPuddle(world, pos, world.getBlockState(pos)) ? false : null;
     }
 
     /**
@@ -263,10 +272,16 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         return FluidicWater.level(state) > Water.LEVELS / 2 ? lightOpacity : 1;
     }
 
+    @Override
+    public int getLightOpacity(@Nonnull IBlockState state, @Nonnull IBlockAccess world, @Nonnull BlockPos pos) {
+        return FluidicWater.isFinite(world) ? getLightOpacity(state) : lightOpacity;
+    }
+
     // ---------------------------------------------------------------- rendering
 
     @Override
     public boolean shouldSideBeRendered(@Nonnull IBlockState state, @Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull EnumFacing side) {
+        if(!FluidicWater.isFinite(world)) return super.shouldSideBeRendered(state, world, pos, side);
         BlockPos offset = pos.offset(side);
         boolean simulated = FluidicWater.simHeight(offset) > 0;
         // Simulated water is drawn by the client renderer, its top and bottom meet this water without a face
@@ -286,6 +301,10 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     @Override
     @SideOnly(Side.CLIENT)
     public void randomDisplayTick(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Random rand) {
+        if(!FluidicWater.isFinite(world)) {
+            super.randomDisplayTick(state, world, pos, rand);
+            return;
+        }
         if(rand.nextInt(10) == 0) {
             world.spawnParticle(EnumParticleTypes.SUSPENDED, pos.getX() + rand.nextFloat(), pos.getY() + rand.nextFloat(), pos.getZ() + rand.nextFloat(), 0.0D, 0.0D, 0.0D);
         }

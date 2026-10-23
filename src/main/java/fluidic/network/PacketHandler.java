@@ -11,5 +11,6 @@ public class PacketHandler {
 
     public static void init() {
         INSTANCE.registerMessage(MessageWaterSection.Handler.class, MessageWaterSection.class, 0, Side.CLIENT);
+        INSTANCE.registerMessage(MessageVanillaDimensions.Handler.class, MessageVanillaDimensions.class, 1, Side.CLIENT);
     }
 }

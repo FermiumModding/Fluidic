@@ -15,7 +15,8 @@ import java.util.Random;
 /**
  * Replaces vanilla flowing water, registered as minecraft:flowing_water. Vanilla places flowing water when a
  * bucket is emptied or a spring generates. Flowing is up to the simulation, so this turns itself into still
- * water as soon as anything happens to it, which hands it to the simulation.
+ * water as soon as anything happens to it, which hands it to the simulation. In dimensions keeping vanilla water it
+ * flows like vanilla flowing water.
  */
 public class BlockFluidicFlowingWater extends BlockDynamicLiquid {
 
@@ -35,27 +36,31 @@ public class BlockFluidicFlowingWater extends BlockDynamicLiquid {
 
     @Override
     public void onBlockAdded(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        settle(world, pos, state);
+        if(FluidicWater.isFinite(world)) settle(world, pos, state);
+        else super.onBlockAdded(world, pos, state);
     }
 
     @Override
     public void neighborChanged(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Block block, @Nonnull BlockPos fromPos) {
-        settle(world, pos, state);
+        if(FluidicWater.isFinite(world)) settle(world, pos, state);
+        else super.neighborChanged(state, world, pos, block, fromPos);
     }
 
     @Override
     public void updateTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
-        settle(world, pos, state);
+        if(FluidicWater.isFinite(world)) settle(world, pos, state);
+        else super.updateTick(world, pos, state, rand);
     }
 
     @Override
     public void randomTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
-        settle(world, pos, state);
+        // Vanilla flowing water has no random ticks
+        if(FluidicWater.isFinite(world)) settle(world, pos, state);
     }
 
     @Override
     @Nonnull
     protected Vec3d getFlow(@Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        return Vec3d.ZERO;
+        return FluidicWater.isFinite(world) ? Vec3d.ZERO : super.getFlow(world, pos, state);
     }
 }

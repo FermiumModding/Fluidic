@@ -42,6 +42,8 @@ public class BucketHandler {
         RayTraceResult target = event.getTarget();
         if(target == null || target.typeOfHit != RayTraceResult.Type.BLOCK) return;
         World world = event.getWorld();
+        // Vanilla buckets in dimensions keeping vanilla water
+        if(!FluidicWater.isFinite(world)) return;
         EntityPlayer player = event.getEntityPlayer();
         BlockPos pos = target.getBlockPos();
         IBlockState state = world.getBlockState(pos);

@@ -6,6 +6,7 @@ import fluidic.block.FluidicWater;
 import fluidic.sim.SectionHeights;
 import fluidic.sim.Water;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -14,6 +15,7 @@ import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraftforge.fml.common.network.FMLNetworkEvent;
 import net.minecraftforge.fml.relauncher.Side;
 
 import java.util.Iterator;
@@ -65,6 +67,12 @@ public final class ClientWaterCache {
         show(key, shown);
     }
 
+    /** The next server sends its own dimensions keeping vanilla water */
+    @SubscribeEvent
+    public static void onDisconnect(FMLNetworkEvent.ClientDisconnectionFromServerEvent event) {
+        FluidicWater.clientVanillaDimensions = new int[0];
+    }
+
     @SubscribeEvent
     public static void onWorldLoad(WorldEvent.Load event) {
         if(event.getWorld().isRemote) event.getWorld().addEventListener(new ClientWorldListener());
@@ -74,6 +82,8 @@ public final class ClientWaterCache {
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if(event.phase != TickEvent.Phase.END) return;
         ticks++;
+        WorldClient current = Minecraft.getMinecraft().world;
+        FluidicWater.clientVanilla = current != null && !FluidicWater.isFinite(current);
         ChunkWater.update();
         if(DEFERRED.isEmpty()) return;
         if(Minecraft.getMinecraft().world == null) {

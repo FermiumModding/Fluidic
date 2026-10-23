@@ -28,12 +28,12 @@ public abstract class BlockFluidRendererMixin {
 
     @Inject(method = "getFluidHeight", at = @At("HEAD"), cancellable = true)
     private void fluidic_waterCornerHeight(IBlockAccess world, BlockPos corner, Material material, CallbackInfoReturnable<Float> cir) {
-        if(material == Material.WATER) cir.setReturnValue(FluidicWater.cornerHeight(world, corner));
+        if(material == Material.WATER && FluidicWater.isFinite(world)) cir.setReturnValue(FluidicWater.cornerHeight(world, corner));
     }
 
     @Redirect(method = "renderFluid", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;pos(DDD)Lnet/minecraft/client/renderer/BufferBuilder;"))
     private BufferBuilder fluidic_waterSideBottom(BufferBuilder buffer, double x, double y, double z, IBlockAccess world, IBlockState state, BlockPos pos, BufferBuilder target) {
-        if(y == pos.getY() && state.getMaterial() == Material.WATER) y = FluidicWater.sideBottom(world, pos, x, y, z);
+        if(y == pos.getY() && state.getMaterial() == Material.WATER && FluidicWater.isFinite(world)) y = FluidicWater.sideBottom(world, pos, x, y, z);
         return buffer.pos(x, y, z);
     }
 }

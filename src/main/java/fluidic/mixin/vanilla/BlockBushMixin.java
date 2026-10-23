@@ -1,5 +1,6 @@
 package fluidic.mixin.vanilla;
 
+import fluidic.block.FluidicWater;
 import fluidic.block.LilyPads;
 import net.minecraft.block.BlockBush;
 import net.minecraft.block.BlockLilyPad;
@@ -17,7 +18,7 @@ public abstract class BlockBushMixin {
 
     @Inject(method = "checkAndDropBlock", at = @At("HEAD"), cancellable = true)
     private void fluidic_lilyPadFollowsWater(World world, BlockPos pos, IBlockState state, CallbackInfo ci) {
-        if(!((Object)this instanceof BlockLilyPad) || world.isRemote) return;
+        if(!((Object)this instanceof BlockLilyPad) || world.isRemote || !FluidicWater.isFinite(world)) return;
         if(((BlockBush)(Object)this).canBlockStay(world, pos, state)) LilyPads.watch(world, pos);
         else if(LilyPads.follow(world, pos, state)) ci.cancel();
     }

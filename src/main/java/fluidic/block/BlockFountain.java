@@ -8,6 +8,7 @@ import fluidic.sim.Water;
 import fluidic.sim.WaterSimulation;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockDirectional;
+import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.SoundType;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.properties.PropertyBool;
@@ -16,6 +17,7 @@ import net.minecraft.block.state.BlockStateContainer;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.Mirror;
 import net.minecraft.util.Rotation;
@@ -68,6 +70,12 @@ public class BlockFountain extends Block {
         if(powered == state.getValue(POWERED)) return;
         world.setBlockState(pos, state.withProperty(POWERED, powered), 2);
         if(powered) world.scheduleUpdate(pos, this, 1);
+        else if(!FluidicWater.isFinite(world)) {
+            // The vanilla water source it placed goes, the water flowing from it dries up
+            BlockPos front = pos.offset(state.getValue(FACING));
+            IBlockState water = world.getBlockState(front);
+            if(FluidicWater.isWater(water) && water.getValue(BlockLiquid.LEVEL) == 0) world.setBlockToAir(front);
+        }
     }
 
     /** Pours while powered and comes back to pour again, scheduled ticks are saved with the chunk */
@@ -79,6 +87,17 @@ public class BlockFountain extends Block {
     }
 
     private static void pour(World world, BlockPos front) {
+        if(!FluidicWater.isFinite(world)) {
+            // Vanilla water is endless already, a source in front pours as much as it likes
+            if(!world.isBlockLoaded(front)) return;
+            IBlockState state = world.getBlockState(front);
+            boolean source = FluidicWater.isWater(state) && state.getValue(BlockLiquid.LEVEL) == 0;
+            if(!source && (state.getMaterial().isReplaceable() || state.getMaterial() == Material.WATER)) {
+                // Flowing like water poured from a bucket, so it starts spreading
+                world.setBlockState(front, Blocks.FLOWING_WATER.getDefaultState());
+            }
+            return;
+        }
         WaterSimulation simulation = SimManager.get(world);
         if(simulation == null || !world.isBlockLoaded(front)) return;
         int amount = (int)Math.round(ForgeConfigHandler.server.fountainOutput * Water.FULL * POUR_TICKS / 20.0D);
