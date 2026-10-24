@@ -27,6 +27,15 @@ public final class SettledRedraws {
     private SettledRedraws() {}
 
     static void add(int x, int y, int z) {
+        // Until they are redrawn, simulated water resting on them is drawn against them as they were
+        for(int dx = -1; dx <= 1; dx += 2) {
+            for(int dy = -1; dy <= 1; dy += 2) {
+                for(int dz = -1; dz <= 1; dz += 2) {
+                    int sy = (y + dy) >> 4;
+                    if(sy >= 0 && sy <= 15) ChunkRedraws.simulatedChanged(Water.sectionKey((x + dx) >> 4, sy, (z + dz) >> 4));
+                }
+            }
+        }
         long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
         int[] area = PENDING.get(key);
         if(area == null) {

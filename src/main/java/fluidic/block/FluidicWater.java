@@ -297,6 +297,7 @@ public final class FluidicWater {
         }
         float sum = 0.0F;
         int count = 0, sheets = 0;
+        boolean edge = false;
         boolean column = false;
         // The edge of a thin layer on a pool slopes down onto the pool, the pool around it is as high as the layer's bottom.
         // By the cells around the corner, not the block drawn, so all blocks sharing the corner agree on it.
@@ -317,7 +318,7 @@ public final class FluidicWater {
                 continue;
             }
             if(height < 0.0F) continue;
-            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) > 0)) count += 10;
+            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) > 0)) edge = true;
             if(height >= Water.RENDER_HEIGHT) {
                 sum += height * 10.0F;
                 count += 10;
@@ -328,6 +329,8 @@ public final class FluidicWater {
         // Water spreading over a pool in a sheet, like a bucket poured onto it, raises the blocks under it to full height.
         // Where two of them meet the pool the surface rises to meet them instead of stepping up. A single one is a
         // stream falling in, the pool around it stays flat.
+        // All the way down, short of it a sliver of the layer's side would stand at its edge
+        if(edge) return 0.0F;
         if(sheets >= 2) return 1.0F;
         if(count == 0) return column ? 1.0F : 0.0F;
         return sum / count;

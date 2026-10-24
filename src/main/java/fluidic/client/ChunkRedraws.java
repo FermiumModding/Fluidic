@@ -2,6 +2,7 @@ package fluidic.client;
 
 import fluidic.block.FluidicWater;
 import fluidic.sim.Water;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -31,6 +32,9 @@ public final class ChunkRedraws {
      */
     private static final Long2LongOpenHashMap WATER_CHANGES = new Long2LongOpenHashMap();
     /** The cells of WATER_CHANGES by section */
+    /** Sections of water blocks to be redrawn for simulated water that changed, the sequence number of the change */
+    private static final Long2LongOpenHashMap STALE = new Long2LongOpenHashMap();
+    private static final Long2LongOpenHashMap STALE_SINCE = new Long2LongOpenHashMap();
     /** The block each cell of WATER_CHANGES had before, which the chunk on screen still shows */
     private static final Long2ObjectOpenHashMap<IBlockState> OLD_STATES = new Long2ObjectOpenHashMap<>();
     private static final Long2ObjectOpenHashMap<LongArrayList> WATER_CHANGE_CELLS = new Long2ObjectOpenHashMap<>();
@@ -41,6 +45,7 @@ public final class ChunkRedraws {
 
     static {
         WATER_CHANGES.defaultReturnValue(-1L);
+        STALE.defaultReturnValue(-1L);
     }
 
     private ChunkRedraws() {}
@@ -91,8 +96,18 @@ public final class ChunkRedraws {
      * match, and forgets the changes
      */
     static void caughtUp(LongConsumer sections) {
-        if(WATER_CHANGE_CELLS.isEmpty()) return;
         long now = System.nanoTime();
+        for(ObjectIterator<Long2LongMap.Entry> it = STALE.long2LongEntrySet().fastIterator(); it.hasNext(); ) {
+            Long2LongMap.Entry entry = it.next();
+            long key = entry.getLongKey();
+            if(!shows(key) && now - STALE_SINCE.get(key) < WATER_CHANGE_TIMEOUT) continue;
+            it.remove();
+            STALE_SINCE.remove(key);
+            // The simulated water above it, resting on it, is drawn against it too
+            sections.accept(key);
+            if(Water.keyY(key) < 15) sections.accept(Water.sectionKey(Water.keyX(key), Water.keyY(key) + 1, Water.keyZ(key)));
+        }
+        if(WATER_CHANGE_CELLS.isEmpty()) return;
         for(ObjectIterator<Long2ObjectMap.Entry<LongArrayList>> it = WATER_CHANGE_CELLS.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
             Long2ObjectMap.Entry<LongArrayList> entry = it.next();
             Long drawn = DRAWN.get(entry.getLongKey());
@@ -109,6 +124,24 @@ public final class ChunkRedraws {
             it.remove();
             sections.accept(key);
         }
+    }
+
+    /**
+     * Water blocks in a section are drawn against simulated water, which changed, so the section is redrawn. Until it is
+     * on screen, simulated water resting on those blocks is drawn against them as they were, see WaterRenderer.
+     */
+    static void simulatedChanged(long key) {
+        STALE.put(key, next());
+        if(!STALE_SINCE.containsKey(key)) STALE_SINCE.put(key, System.nanoTime());
+    }
+
+    /** Whether the section on screen was drawn after the simulated water it is drawn against last changed */
+    static boolean shows(long key) {
+        if(STALE.isEmpty()) return true;
+        long stale = STALE.get(key);
+        if(stale < 0L) return true;
+        Long drawn = DRAWN.get(key);
+        return drawn != null && drawn >= stale;
     }
 
     /** A redraw that started with the given sequence number is now on screen */
@@ -140,6 +173,8 @@ public final class ChunkRedraws {
                 }
             }
             WATER_CHANGE_SINCE.remove(key);
+            STALE.remove(key);
+            STALE_SINCE.remove(key);
         }
     }
 
@@ -148,6 +183,8 @@ public final class ChunkRedraws {
         DRAWN.clear();
         WATER_CHANGES.clear();
         OLD_STATES.clear();
+        STALE.clear();
+        STALE_SINCE.clear();
         WATER_CHANGE_CELLS.clear();
         WATER_CHANGE_SINCE.clear();
     }

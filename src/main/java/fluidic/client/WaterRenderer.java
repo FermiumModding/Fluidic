@@ -8,6 +8,7 @@ import fluidic.sim.Terrain;
 import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
@@ -57,6 +58,8 @@ public final class WaterRenderer {
     private static final long REBUILD_NANOS = 2_000_000L;
     /** Time per frame spent on sections beside changed blocks at most */
     private static final long URGENT_NANOS = 4_000_000L;
+    /** Most sections rebuilt together in one group, see rebuildGroup */
+    private static final int MAX_GROUP = 64;
     /** Surface height of a full block of water as vanilla renders it */
     private static final float FULL_HEIGHT = Water.RENDER_HEIGHT;
 
@@ -130,18 +133,13 @@ public final class WaterRenderer {
         ChunkRedraws.caughtUp(WaterRenderer::markUrgent);
         // Sections beside changed blocks go first and past the count, vanilla may draw the change in this same frame
         long urgentDeadline = System.nanoTime() + URGENT_NANOS;
-        for(LongIterator it = URGENT.iterator(); it.hasNext() && System.nanoTime() < urgentDeadline; ) {
-            long key = it.nextLong();
-            it.remove();
+        while(!URGENT.isEmpty() && System.nanoTime() < urgentDeadline) {
+            long key = URGENT.removeFirstLong();
             DIRTY.remove(key);
-            rebuild(world, key);
+            rebuildGroup(world, key);
         }
         long deadline = System.nanoTime() + REBUILD_NANOS;
-        for(LongIterator it = DIRTY.iterator(); it.hasNext() && budget > 0 && System.nanoTime() < deadline; budget--) {
-            long key = it.nextLong();
-            it.remove();
-            rebuild(world, key);
-        }
+        while(!DIRTY.isEmpty() && budget > 0 && System.nanoTime() < deadline) budget -= rebuildGroup(world, DIRTY.removeFirstLong());
         if(DISPLAY_LISTS.isEmpty()) return;
 
         float partialTicks = event.getPartialTicks();
@@ -227,6 +225,34 @@ public final class WaterRenderer {
 
     // ---------------------------------------------------------------- mesh building
 
+    /**
+     * Rebuilds a section and the sections around it waiting for a rebuild too, in the same frame. Sections share the
+     * corners along their borders, rebuilt in different frames the two sides would not meet for a frame and open gaps,
+     * as a wake spreading through water crosses them. Returns how many were rebuilt.
+     */
+    private static int rebuildGroup(WorldClient world, long first) {
+        LongArrayList group = new LongArrayList();
+        group.add(first);
+        int built = 0;
+        for(; built < group.size() && built < MAX_GROUP; built++) {
+            long key = group.getLong(built);
+            rebuild(world, key);
+            int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
+            for(int dx = -1; dx <= 1; dx++) {
+                for(int dy = -1; dy <= 1; dy++) {
+                    for(int dz = -1; dz <= 1; dz++) {
+                        if(sy + dy < 0 || sy + dy > 15) continue;
+                        long neighbor = Water.sectionKey(sx + dx, sy + dy, sz + dz);
+                        if(DIRTY.remove(neighbor) | URGENT.remove(neighbor)) group.add(neighbor);
+                    }
+                }
+            }
+        }
+        // Too many at once, the rest waits for the next frame
+        for(int n = built; n < group.size(); n++) DIRTY.add(group.getLong(n));
+        return built;
+    }
+
     private static void rebuild(WorldClient world, long key) {
         byte[] heights = ClientWaterCache.section(key);
         boolean any = false;
@@ -293,7 +319,7 @@ public final class WaterRenderer {
         // Corner heights, shared with neighbouring cells so the surface is continuous. Water continuing up, like a
         // falling stream, is full height on its own and draws its sides down to the water around it
         boolean column = surface >= 1.0F;
-        film = FluidicWater.isFilm(world, new BlockPos(x, y, z));
+        film = filmShown(world, x, y, z);
         // The corners as the water around shares them, a column's sides reach down to these
         BlockPos cell = new BlockPos(x, y, z);
         float s00 = corner(world, x, y, z, surface, cell);
@@ -481,11 +507,12 @@ public final class WaterRenderer {
         }
         float sum = 0.0F;
         int count = 0, columns = 0, sheets = 0;
+        boolean edge = false;
         // The edge of a thin layer on a pool slopes down onto the pool, see FluidicWater.surfaceCorner. By the cells around
         // the corner, so the cells sharing it agree.
         boolean film = false;
         for(int dx = -1; dx <= 0 && !film; dx++) {
-            for(int dz = -1; dz <= 0 && !film; dz++) film = FluidicWater.isFilm(world, new BlockPos(x + dx, y, z + dz));
+            for(int dz = -1; dz <= 0 && !film; dz++) film = filmShown(world, x + dx, y, z + dz);
         }
         for(int dx = -1; dx <= 0; dx++) {
             for(int dz = -1; dz <= 0; dz++) {
@@ -508,7 +535,7 @@ public final class WaterRenderer {
                 if(s < 0.0F) {
                     if(isSolid(world, x + dx, y, z + dz)) continue;
                     s = 0.0F;
-                    if(film && raised(world, x + dx, y - 1, z + dz)) count += 10;
+                    if(film && raised(world, x + dx, y - 1, z + dz)) edge = true;
                 }
                 if(s >= FULL_HEIGHT) {
                     sum += s * 10.0F;
@@ -519,9 +546,19 @@ public final class WaterRenderer {
             }
         }
         // Unless two meet here, a sheet of water spreading over a pool, see FluidicWater.surfaceCorner
+        if(edge) return 0.0F;
         if(sheets >= 2) return 1.0F;
         if(count == 0) return columns > 0 ? 1.0F : fallback;
         return sum / count;
+    }
+
+    /**
+     * A thin layer resting on full water, see FluidicWater.isFilm, once the water blocks under it are drawn reaching up to
+     * it. Until their chunk is redrawn they show their usual surface, the layer is drawn as plain water down to it, or
+     * its edge would hang above them with a gap below.
+     */
+    private static boolean filmShown(WorldClient world, int x, int y, int z) {
+        return FluidicWater.isFilm(world, new BlockPos(x, y, z)) && ChunkRedraws.shows(Water.sectionKey(x >> 4, (y - 1) >> 4, z >> 4));
     }
 
     /** Whether water at a block makes the water below reach up to it */
