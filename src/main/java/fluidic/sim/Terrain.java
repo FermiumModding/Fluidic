@@ -328,10 +328,11 @@ public final class Terrain {
         Block block = state.getBlock();
         Material material = state.getMaterial();
         if(material == Material.AIR) return WaterSection.OPEN;
-        if(material == Material.WATER) return WaterSection.SINK;
+        // Water flowing into a nether or end portal is carried away
+        if(material == Material.WATER || material == Material.PORTAL) return WaterSection.SINK;
         // Lava hardens where water touches it
         if(material == Material.LAVA) return WaterSection.SOLID_REACTIVE;
-        if(material.isLiquid() || material == Material.PORTAL || material == Material.STRUCTURE_VOID) return WaterSection.SOLID;
+        if(material.isLiquid() || material == Material.STRUCTURE_VOID) return WaterSection.SOLID;
         if(block instanceof BlockConcretePowder) return WaterSection.SOLID_REACTIVE;
         if(material == Material.LEAVES) return WaterSection.POROUS;
         // Tall grass, double plants, snow layers and fire

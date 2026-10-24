@@ -117,7 +117,7 @@ public class ForgeConfigHandler {
 				"  smooth    - blocks water, water runs quickly over it (stone, glass)",
 				"  thin      - blocks water, water beside it is drawn reaching up to the block instead of stopping at its edge (glass panes, walls)",
 				"  reactive  - blocks water, the block is updated when water touches it (concrete powder, lava)",
-				"  sink      - water flowing in disappears (water of other mods)",
+				"  sink      - water flowing in disappears (water of other mods, nether and end portals)",
 				"Doors not listed here let water flow through them, but not across the side the door is on, open or closed."})
 		@Config.Name("Block Classifications")
 		public String[] blockClassifications = {
