@@ -12,6 +12,7 @@ import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
+import net.minecraftforge.fml.common.Loader;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -51,7 +52,8 @@ public final class ChunkWater {
         switch(ForgeConfigHandler.client.chunkWater) {
             case ALWAYS: wanted = true; break;
             case NEVER: wanted = false; break;
-            default: wanted = isShaderPackLoaded();
+            // Celeritas draws chunks with its own shader, water drawn separately comes out lighter than its water blocks
+            default: wanted = isShaderPackLoaded() || Celeritas.LOADED;
         }
         wanted &= ForgeConfigHandler.client.renderWater && !bypassed;
         if(wanted == active) return;
@@ -84,11 +86,15 @@ public final class ChunkWater {
 
     /** The block a chunk redraw sees: simulated water in an empty block reads as a water block of the same level */
     public static IBlockState substitute(IBlockState state, BlockPos pos) {
+        return substitute(state, pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    public static IBlockState substitute(IBlockState state, int x, int y, int z) {
         int[] redraw = REDRAW.get();
         if(redraw[0] == 0) return state;
         redraw[1]++;
         if(state.getMaterial() != Material.AIR) return state;
-        int height = ClientWaterCache.heightAnyThread(pos.getX(), pos.getY(), pos.getZ());
+        int height = ClientWaterCache.heightAnyThread(x, y, z);
         if(height == 0) return state;
         return FluidicWater.state(Math.max(1, Math.round(height * Water.LEVELS / 255.0F)));
     }
@@ -131,7 +137,7 @@ public final class ChunkWater {
      * it did, then {@link #untag} has to be called once they are drawn.
      */
     public static boolean tagAs(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer) {
-        if(OptiFine.PUSH_ENTITY == null || OptiFine.POP_ENTITY == null || !isShaderPackLoaded()) return false;
+        if(OptiFine.PUSH_ENTITY == null || OptiFine.POP_ENTITY == null || !isOptiFineShaderPackLoaded()) return false;
         try {
             OptiFine.PUSH_ENTITY.invoke(null, state, pos, world, buffer);
             return true;
@@ -151,12 +157,56 @@ public final class ChunkWater {
     }
 
     private static boolean isShaderPackLoaded() {
+        return isOptiFineShaderPackLoaded() || Celeritas.isShaderPackInUse();
+    }
+
+    private static boolean isOptiFineShaderPackLoaded() {
         if(OptiFine.SHADER_PACK_LOADED == null) return false;
         try {
             return OptiFine.SHADER_PACK_LOADED.getBoolean(null);
         }
         catch(IllegalAccessException ex) {
             return false;
+        }
+    }
+
+    /**
+     * Shader packs of Celeritas and its forks like Voxtavium, through their shader API. They draw chunks themselves,
+     * fluidic.mixin.celeritas hooks into that instead of ChunkCache.
+     */
+    private static final class Celeritas {
+        static final boolean LOADED = Loader.isModLoaded("celeritas");
+        static final Object API = api();
+        static final Method IN_USE = API == null ? null : method(API);
+
+        static boolean isShaderPackInUse() {
+            if(IN_USE == null) return false;
+            try {
+                return (Boolean)IN_USE.invoke(API);
+            }
+            catch(ReflectiveOperationException | RuntimeException ex) {
+                return false;
+            }
+        }
+
+        private static Object api() {
+            try {
+                return Class.forName("org.taumc.celeritas.api.v0.CeleritasShadersApi").getMethod("getInstance").invoke(null);
+            }
+            catch(ReflectiveOperationException | Error | RuntimeException ex) {
+                return null;
+            }
+        }
+
+        private static Method method(Object api) {
+            try {
+                Method method = Class.forName("org.taumc.celeritas.api.v0.CeleritasShadersApi").getMethod("isShaderPackInUse");
+                method.setAccessible(true);
+                return method;
+            }
+            catch(ReflectiveOperationException | LinkageError | RuntimeException ex) {
+                return null;
+            }
         }
     }
 

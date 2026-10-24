@@ -124,10 +124,14 @@ public final class ClientWaterCache {
             if(ForgeConfigHandler.client.renderWater && (a == 0) != (b == 0) && besideSettledWater(mc, pos, ox + x, oy + y, oz + z)) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);
             }
+            // The blocks below are lit through it, see ChunkLight. Drawn by the chunks, its redraw reaches them.
+            if(!ChunkWater.isActive() && ChunkLight.dimOf(a) != ChunkLight.dimOf(b)) {
+                for(int dy = 0; dy <= ChunkLight.reach(); dy++) SettledRedraws.add(ox + x, oy + y - dy, oz + z);
+            }
         }
         WaterRenderer.markDirty(key, borders);
         // Drawn by the chunks, the changed blocks and those beside them are redrawn
-        if(ChunkWater.isActive() && x1 >= 0) ChunkWater.redraw(ox + x0, oy + y0, oz + z0, ox + x1, oy + y1, oz + z1);
+        if(ChunkWater.isActive() && x1 >= 0) ChunkWater.redraw(ox + x0, oy + y0 - ChunkLight.reach(), oz + z0, ox + x1, oy + y1, oz + z1);
     }
 
     private static boolean besideSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {

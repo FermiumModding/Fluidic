@@ -1,0 +1,12 @@
+{
+  "required": false,
+  "package": "fluidic.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "client": [
+    "celeritas.MeshingTaskMixin",
+    "celeritas.RenderSectionManagerMixin",
+    "celeritas.WorldSliceMixin"
+  ]
+}

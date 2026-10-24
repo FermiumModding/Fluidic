@@ -278,7 +278,10 @@ public final class WaterRenderer {
         red = color >> 16 & 255;
         green = color >> 8 & 255;
         blue = color & 255;
-        int sky = light >> 16 & 65535, block = light & 65535;
+        // Sky light dimmed by the simulated water, like water blocks dim it, the surface lit from above like theirs
+        int above = world.getCombinedLight(POS.setPos(x, y + 1, z), 0) >> 20 & 15;
+        int skyLevel = Math.max(ChunkLight.dimmed(light >> 20 & 15, x, y, z), ChunkLight.dimmed(above, x, y + 1, z));
+        int sky = skyLevel << 4, block = light & 65535;
         boolean added = false;
 
         // Corner heights, shared with neighbouring cells so the surface is continuous. Water continuing up, like a

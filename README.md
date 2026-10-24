@@ -62,9 +62,12 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * **Client rendering** (`WaterRenderer`). The server sends deflated per-cell heights of changed sections
   to players watching the chunk. The client compiles each section into a display list, with smoothed
   corner heights, and draws it after the world. Shader packs only shade what the chunks draw, so while an
-  OptiFine shader pack is in use (`Draw Simulated Water In Chunks` in the client config) simulated water is
+  shader pack is in use, and always with Celeritas or its forks like Voxtavium, whose own chunk lighting separately drawn water
+  would not match (`Draw Simulated Water In Chunks` in the client config) simulated water is
   drawn by the chunks instead: while a chunk redraws, empty blocks holding simulated water read as water
-  blocks of the same level (`ChunkWater`). Water moving then makes its chunks redraw, which costs more.
+  blocks of the same level (`ChunkWater`). Water moving then makes its chunks redraw, which costs more. Simulated
+  water is no block to the light engine, so while chunks are drawn, sky light in and under it is dimmed like water
+  blocks dim it (`ChunkLight`), only for drawing.
 * **Buckets**. Vanilla buckets scoop up full water blocks and pour them back, which then flow. Aimed at
   partly filled water, a bucket gathers a block of water from the surface around it (`BucketHandler`), an
   eighth at a time from the highest blocks, and only fills when there is a whole block to take, so no water

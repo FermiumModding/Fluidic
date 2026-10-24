@@ -1,6 +1,7 @@
 package fluidic;
 
 import java.util.Map;
+import net.minecraftforge.fml.common.Loader;
 
 import fermiumbooter.FermiumRegistryAPI;
 import net.minecraftforge.fml.relauncher.CoreModManager;
@@ -19,6 +20,8 @@ public class FluidicPlugin implements IFMLLoadingPlugin {
 		// world generation. Always on. The entity physics of simulated water are a separate config, switched by
 		// @MixinConfig.MixinToggle in ForgeConfigHandler. False for Vanilla/Coremod mixins.
 		FermiumRegistryAPI.enqueueMixin(false, "mixins.fluidic.vanilla.json");
+		// Celeritas and its forks like Voxtavium draw chunks themselves, simulated water hooks into that too
+		FermiumRegistryAPI.enqueueMixin(true, "mixins.fluidic.celeritas.json", () -> Loader.isModLoaded("celeritas"));
 	}
 
 	@Override

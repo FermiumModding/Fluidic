@@ -264,7 +264,8 @@ public class ForgeConfigHandler {
 				"Draws simulated water as part of the chunks it is in, as water blocks, instead of separately. Shader packs",
 				"only shade what the chunks draw, so this is needed for them, but water moving makes its chunks redraw,",
 				"which costs more in busy weather.",
-				"  AUTO   - while an OptiFine shader pack is in use",
+				"  AUTO   - while a shader pack is in use, and always with Celeritas or its forks like Voxtavium, which draw",
+				"           chunks with their own lighting that separately drawn water does not match",
 				"  ALWAYS - always",
 				"  NEVER  - never"})
 		@Config.Name("Draw Simulated Water In Chunks")
