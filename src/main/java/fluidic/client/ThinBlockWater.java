@@ -25,7 +25,8 @@ import java.util.List;
  * water beside one is drawn reaching into its block up to the glass instead of stopping at the edge of the block and
  * leaving a gap. Seen from above, the block is split along the edges of its parts into a grid of rectangles. Open
  * rectangles touching water, beside the block or diagonally at a corner like inside a corner of panes, are wet, and
- * so are the open rectangles they connect to. Water on each side of the glass is drawn on its own side only.
+ * so are the open rectangles they connect to, but not ones at the edge of the block with open dry ground beyond. Water
+ * on each side of the glass is drawn on its own side only.
  *
  * Water blocks are drawn into the block with the chunk, simulated water by WaterRenderer, which redraws as it moves.
  * Where both reach the same open part, the chunk draws it.
@@ -108,15 +109,30 @@ public final class ThinBlockWater {
             }
         }
 
+        // Water spreads only into rectangles inside the block or against blocks holding it back. One no water touches at
+        // an edge of the block with open dry ground beyond, like around the post of a pane ending at a hole that water
+        // runs through, would show water spilling out where none flows.
+        boolean[] spills = new boolean[4];
+        for(int k = 0; k < 4; k++) {
+            spills[k] = around[k] == DRY && !world.getBlockState(pos.add(AROUND[k][0], 0, AROUND[k][1])).getMaterial().blocksMovement();
+        }
+        boolean[][] closed = new boolean[nx][nz];
+        for(int i = 0; i < nx; i++) {
+            for(int j = 0; j < nz; j++) {
+                closed[i][j] = !open[i][j] || fedBy(i, j, nx, nz, around) == 0
+                        && (i == 0 && spills[0] || i == nx - 1 && spills[1] || j == 0 && spills[2] || j == nz - 1 && spills[3]);
+            }
+        }
+
         // Wet rectangles, joined into the separate pools of water they belong to
         int[][] pool = new int[nx][nz];
         for(int[] row : pool) Arrays.fill(row, -1);
         List<boolean[]> feeds = new ArrayList<>();
         for(int i = 0; i < nx; i++) {
             for(int j = 0; j < nz; j++) {
-                if(!open[i][j] || pool[i][j] >= 0 || fedBy(i, j, nx, nz, around) == 0) continue;
+                if(closed[i][j] || pool[i][j] >= 0 || fedBy(i, j, nx, nz, around) == 0) continue;
                 boolean[] fed = new boolean[AROUND.length];
-                fill(pool, open, i, j, feeds.size(), nx, nz, around, fed);
+                fill(pool, closed, i, j, feeds.size(), nx, nz, around, fed);
                 feeds.add(fed);
             }
         }
@@ -224,15 +240,15 @@ public final class ThinBlockWater {
         return bits;
     }
 
-    private static void fill(int[][] pool, boolean[][] open, int i, int j, int id, int nx, int nz, int[] around, boolean[] fed) {
-        if(i < 0 || j < 0 || i >= nx || j >= nz || !open[i][j] || pool[i][j] >= 0) return;
+    private static void fill(int[][] pool, boolean[][] closed, int i, int j, int id, int nx, int nz, int[] around, boolean[] fed) {
+        if(i < 0 || j < 0 || i >= nx || j >= nz || closed[i][j] || pool[i][j] >= 0) return;
         pool[i][j] = id;
         int bits = fedBy(i, j, nx, nz, around);
         for(int k = 0; k < AROUND.length; k++) if((bits & 1 << k) != 0) fed[k] = true;
-        fill(pool, open, i - 1, j, id, nx, nz, around, fed);
-        fill(pool, open, i + 1, j, id, nx, nz, around, fed);
-        fill(pool, open, i, j - 1, id, nx, nz, around, fed);
-        fill(pool, open, i, j + 1, id, nx, nz, around, fed);
+        fill(pool, closed, i - 1, j, id, nx, nz, around, fed);
+        fill(pool, closed, i + 1, j, id, nx, nz, around, fed);
+        fill(pool, closed, i, j - 1, id, nx, nz, around, fed);
+        fill(pool, closed, i, j + 1, id, nx, nz, around, fed);
     }
 
     /**
