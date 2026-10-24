@@ -93,6 +93,8 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,
   and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
   sponge touching an ocean or river fills up at once.
+* **The void**. Water falling below the bottom of the world, out of the End or through a hole in the bedrock, is gone,
+  as vanilla water is.
 * **Persistence**. Water still moving when the world saves is written to
   `<dimension>/data/fluidic_water.dat`. Settled water is saved as ordinary blocks.
 

@@ -870,7 +870,7 @@ public final class WaterSimulation {
     private void linkNeighbors(WaterSection section) {
         for(int dir = 0; dir < 6; dir++) {
             int ny = section.sy + Water.DY[dir];
-            section.neighbors[dir] = ny < 0 || ny > 15 ? WaterSection.OUT_OF_WORLD : sections.get(section.neighborKey(dir));
+            section.neighbors[dir] = ny < 0 ? WaterSection.VOID : ny > 15 ? WaterSection.OUT_OF_WORLD : sections.get(section.neighborKey(dir));
         }
     }
 

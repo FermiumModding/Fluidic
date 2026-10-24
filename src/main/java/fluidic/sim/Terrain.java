@@ -362,7 +362,8 @@ public final class Terrain {
         byte[] codes = new byte[6];
         for(int dir = 0; dir < 6; dir++) {
             BlockPos n = pos.offset(FACINGS[dir]);
-            codes[dir] = n.getY() < 0 || n.getY() > 255 || !world.isBlockLoaded(n) ? WaterSection.SOLID : classify(world, n, world.getBlockState(n));
+            // Below the world is the void, water falling into it is gone
+            codes[dir] = n.getY() < 0 ? WaterSection.SINK : n.getY() > 255 || !world.isBlockLoaded(n) ? WaterSection.SOLID : classify(world, n, world.getBlockState(n));
         }
         return codes;
     }

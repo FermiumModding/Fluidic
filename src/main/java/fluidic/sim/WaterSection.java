@@ -75,11 +75,19 @@ final class WaterSection {
 
     private static final byte FLAG_DRAINED = 1;
 
-    /** Stand-in for sections above and below the world, solid and never written to */
-    static final WaterSection OUT_OF_WORLD = new WaterSection(0, -1, 0);
+    /** Stand-in for sections above the world, solid and never written to */
+    static final WaterSection OUT_OF_WORLD = new WaterSection(0, 16, 0);
+    /**
+     * Stand-in for sections below the world, the void: water falling into it is gone, like vanilla water falling out of
+     * the End or through a hole in the bedrock. Never written to.
+     */
+    static final WaterSection VOID = new WaterSection(0, -1, 0);
     static {
         OUT_OF_WORLD.terrain = new byte[4096];
         OUT_OF_WORLD.state = STATE_READY;
+        VOID.terrain = new byte[4096];
+        Arrays.fill(VOID.terrain, SINK);
+        VOID.state = STATE_READY;
     }
 
     final int sx, sy, sz;
