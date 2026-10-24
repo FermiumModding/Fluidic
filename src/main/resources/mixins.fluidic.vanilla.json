@@ -16,12 +16,15 @@
     "vanilla.ItemLilyPadMixin"
   ],
   "client": [
+    "vanilla.ActiveRenderInfoMixin",
     "vanilla.BlockFluidRendererMixin",
     "vanilla.BlockRendererDispatcherMixin",
     "vanilla.BlockRenderLayerMixin",
     "vanilla.ChunkCacheMixin",
     "vanilla.EntityRendererAccessor",
-    "vanilla.RenderChunkMixin"
+    "vanilla.EntityRendererMixin",
+    "vanilla.RenderChunkMixin",
+    "vanilla.WorldClientMixin"
   ],
   "injectors": {
     "maxShiftBy": 10
