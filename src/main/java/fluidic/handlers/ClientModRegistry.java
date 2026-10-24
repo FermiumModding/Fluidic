@@ -1,6 +1,7 @@
 package fluidic.handlers;
 
 import fluidic.Fluidic;
+import fluidic.item.ItemHandSponge;
 import net.minecraft.client.renderer.block.model.ModelResourceLocation;
 import net.minecraft.item.Item;
 import net.minecraftforge.client.event.ModelRegistryEvent;
@@ -12,11 +13,13 @@ import net.minecraftforge.fml.relauncher.Side;
 @Mod.EventBusSubscriber(modid = Fluidic.MODID, value = Side.CLIENT)
 public class ClientModRegistry {
 
-    /** Fluidic water renders as vanilla water, the fountain and drain need item models */
+    /** Fluidic water renders as vanilla water, the fountain, drain and sponge need item models */
     @SubscribeEvent
     public static void modelRegisterEvent(ModelRegistryEvent event) {
         registerItemModel(Item.getItemFromBlock(ModRegistry.FOUNTAIN));
         registerItemModel(Item.getItemFromBlock(ModRegistry.DRAIN));
+        ModelLoader.setCustomModelResourceLocation(ModRegistry.SPONGE, ItemHandSponge.DRY, new ModelResourceLocation(Fluidic.MODID + ":sponge", "inventory"));
+        ModelLoader.setCustomModelResourceLocation(ModRegistry.SPONGE, ItemHandSponge.SOAKED, new ModelResourceLocation(Fluidic.MODID + ":sponge_soaked", "inventory"));
     }
 
     private static void registerItemModel(Item item) {

@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "fluidic:sponge", "data": 1 },
+    { "item": "minecraft:bucket" }
+  ],
+  "result": { "item": "minecraft:water_bucket" }
+}

@@ -5,6 +5,7 @@ import fluidic.block.BlockFluidicFlowingWater;
 import fluidic.block.BlockFluidicWater;
 import fluidic.block.BlockDrain;
 import fluidic.block.BlockFountain;
+import fluidic.item.ItemHandSponge;
 import net.minecraft.block.Block;
 import net.minecraft.init.Items;
 import net.minecraft.item.Item;
@@ -24,6 +25,7 @@ public class ModRegistry {
 
         public static BlockFountain FOUNTAIN;
         public static BlockDrain DRAIN;
+        public static ItemHandSponge SPONGE;
         private static BlockFluidicFlowingWater flowingWater;
 
         /**
@@ -61,5 +63,7 @@ public class ModRegistry {
                 ReflectionHelper.setPrivateValue(ItemBucket.class, (ItemBucket)Items.WATER_BUCKET, flowingWater, "containedBlock", "field_77876_a");
                 event.getRegistry().register(new ItemBlock(FOUNTAIN).setRegistryName(FOUNTAIN.getRegistryName()));
                 event.getRegistry().register(new ItemBlock(DRAIN).setRegistryName(DRAIN.getRegistryName()));
+                SPONGE = new ItemHandSponge();
+                event.getRegistry().register(SPONGE);
         }
 }

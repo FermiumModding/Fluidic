@@ -1,2 +1,4 @@
 tile.fluidic.fountain.name=Fountain
 tile.fluidic.drain.name=Drain
+item.fluidic.sponge.name=Hand Sponge
+item.fluidic.sponge_soaked.name=Soaked Hand Sponge

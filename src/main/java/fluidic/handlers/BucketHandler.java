@@ -34,7 +34,7 @@ import java.util.List;
 public class BucketHandler {
 
     /** Blocks out from the one aimed at that water is gathered from */
-    private static final int REACH = 4;
+    public static final int REACH = 4;
 
     @SubscribeEvent
     public static void onFillBucket(FillBucketEvent event) {
@@ -66,25 +66,31 @@ public class BucketHandler {
         if(total < Water.LEVELS) return;
 
         // The client only predicts the bucket filling, the server takes the water
-        if(!world.isRemote) {
-            int[] taken = levels.clone();
-            for(int n = 0; n < Water.LEVELS; n++) {
-                int highest = 0;
-                for(int k = 1; k < taken.length; k++) if(taken[k] > taken[highest]) highest = k;
-                taken[highest]--;
-            }
-            WaterSimulation simulation = SimManager.get(world);
-            for(int n = 0; n < taken.length; n++) {
-                if(taken[n] == levels[n]) continue;
-                BlockPos cell = surface.get(n);
-                IBlockState lowered = taken[n] == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(taken[n]);
-                FluidicWater.placeQuietly(world, cell, lowered, 3);
-                if(simulation != null) simulation.setTerrain(cell, Terrain.classify(world, cell, lowered));
-            }
-        }
+        if(!world.isRemote) takeLevels(world, surface, levels, Water.LEVELS);
         player.playSound(SoundEvents.ITEM_BUCKET_FILL, 1.0F, 1.0F);
         event.setFilledBucket(new ItemStack(Items.WATER_BUCKET));
         event.setResult(Event.Result.ALLOW);
+    }
+
+    /**
+     * Takes eighths of a block from the surface blocks with the given levels, an eighth at a time from the highest so
+     * the surface goes down evenly. There must be that many to take. Server only.
+     */
+    public static void takeLevels(World world, List<BlockPos> surface, int[] levels, int count) {
+        int[] taken = levels.clone();
+        for(int n = 0; n < count; n++) {
+            int highest = 0;
+            for(int k = 1; k < taken.length; k++) if(taken[k] > taken[highest]) highest = k;
+            taken[highest]--;
+        }
+        WaterSimulation simulation = SimManager.get(world);
+        for(int n = 0; n < taken.length; n++) {
+            if(taken[n] == levels[n]) continue;
+            BlockPos cell = surface.get(n);
+            IBlockState lowered = taken[n] == 0 ? Blocks.AIR.getDefaultState() : FluidicWater.state(taken[n]);
+            FluidicWater.placeQuietly(world, cell, lowered, 3);
+            if(simulation != null) simulation.setTerrain(cell, Terrain.classify(world, cell, lowered));
+        }
     }
 
     /**
@@ -108,12 +114,13 @@ public class BucketHandler {
         event.setResult(Event.Result.ALLOW);
     }
 
-    private static int scoopable(World world, WaterSimulation simulation, int x, int y, int z) {
+    /** Height 0-255 of simulated water at a cell left to take, see WaterSimulation#available, the published height on clients */
+    public static int scoopable(World world, WaterSimulation simulation, int x, int y, int z) {
         return simulation != null ? simulation.available(x, y, z) : SimulatedWater.height(world, x, y, z);
     }
 
     /** Water blocks of the surface the aimed at block belongs to, connected at its height, the aimed at one first */
-    private static List<BlockPos> surfaceAround(World world, BlockPos pos) {
+    public static List<BlockPos> surfaceAround(World world, BlockPos pos) {
         List<BlockPos> cells = new ArrayList<>();
         cells.add(pos);
         for(int n = 0; n < cells.size(); n++) {

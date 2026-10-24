@@ -98,6 +98,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * **Sponges**. A dry sponge soaks up water touching it, partly filled blocks and flowing water included,
   and pools drain into it. Once it holds the configured amount (16 blocks by default) it turns wet. A
   sponge touching an ocean or river fills up at once.
+* **Hand sponges**. A sponge held in the hand (`ItemHandSponge`, 4 from a dry sponge) soaks up puddles and the
+  surface of pools it is used on, partly filled and simulated water included, an eighth at a time like a bucket,
+  until it holds a block of water and is soaked. Crafted with an empty bucket, a soaked sponge is wrung out into
+  a water bucket and stays in the grid dry.
 * **The void**. Water falling below the bottom of the world, out of the End or through a hole in the bedrock, is gone,
   as vanilla water is.
 * **Persistence**. Water still moving when the world saves is written to
