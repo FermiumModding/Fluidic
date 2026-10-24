@@ -576,6 +576,8 @@ public final class WaterRenderer {
                 // Water across the closed side of a door has its own surface
                 if(doors && FluidicWater.apartByDoor(world, cell, x + dx, z + dz)) continue;
                 if(isLiquid(world, x + dx, y, z + dz)) s = liquidHeight(world, x + dx, y, z + dz);
+                // A trace resting on water counts as an empty cell, see FluidicWater.surfaceCorner
+                else if(isTrace(world, x + dx, y, z + dz)) s = -1.0F;
                 else if(blocks && ClientWaterCache.height(x + dx, y, z + dz) > 0) {
                     // Left out, but raised under a sheet of water it still raises the corner, see below
                     sheets += sheetWeight(world, x + dx, y + 1, z + dz);
@@ -626,6 +628,12 @@ public final class WaterRenderer {
     private static void filmsCaughtUp(long key) {
         LongOpenHashSet waiting = FILM_WAITS.remove(key);
         if(waiting != null) for(long section : waiting) markUrgent(section);
+    }
+
+    /** A trace of simulated water resting on water with nothing raising it, not drawn, see FluidicWater.MIN_DRAWN */
+    private static boolean isTrace(SectionBlocks world, int x, int y, int z) {
+        int height = ClientWaterCache.height(x, y, z);
+        return height > 0 && height < FluidicWater.MIN_DRAWN && FluidicWater.isTrace(world, new BlockPos(x, y, z), height) && !raised(world, x, y + 1, z);
     }
 
     /** Whether water at a block makes the water below reach up to it */

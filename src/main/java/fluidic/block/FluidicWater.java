@@ -168,6 +168,18 @@ public final class FluidicWater {
     /** Thickest water that counts as a thin layer, 3/8 of a block. The partly drained top of a deeper pool is no layer. */
     private static final int FILM_MAX = 255 * 3 / 8;
 
+    /**
+     * How simulated water of a height shapes the water blocks around it: none, a trace, a thin layer, a partial cell, or
+     * full enough to carry a thin layer, see isFilm and surfaceCorner. The blocks are redrawn when it changes.
+     */
+    public static int shapeOf(int height) {
+        if(height <= 0) return 0;
+        if(height < MIN_DRAWN) return 1;
+        if(height <= FILM_MAX) return 2;
+        if(height < FILM_BASE) return 3;
+        return 4;
+    }
+
     public static boolean isFilm(IBlockAccess world, BlockPos pos) {
         if(pos.getY() <= 0 || pos.getY() >= 255) return false;
         int here = waterHeight(world, pos);
@@ -320,19 +332,24 @@ public final class FluidicWater {
         for(int j = 0; j < 4; j++) {
             BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
             if(doors && from != null && apartByDoor(world, from, cell.getX(), cell.getZ())) continue;
-            if(blocks && !world.getBlockState(cell).getMaterial().isLiquid() && simHeight(cell) > 0) {
+            int sim = world.getBlockState(cell).getMaterial().isLiquid() ? 0 : simHeight(cell);
+            // A trace resting on water is not drawn, the corner takes it for an empty cell like WaterRenderer.corner. Traces
+            // come and go as the water evens out, counted they would move the corner back and forth.
+            boolean trace = isTrace(world, cell, sim) && renderHeight(world, cell) < 1.0F;
+            if(blocks && sim > 0 && !trace) {
                 // Left out, but raised under a sheet of water it still raises the corner, see below
                 sheets += sheetWeight(world, cell.up());
                 continue;
             }
-            float height = renderHeight(world, cell);
+            float height = trace ? 0.0F : renderHeight(world, cell);
             if(height >= 1.0F) {
                 column = true;
                 sheets += sheetWeight(world, cell.up());
                 continue;
             }
             if(height < 0.0F) continue;
-            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) > 0)) edge = true;
+            // Like WaterRenderer.corner: a trace below is not drawn, see MIN_DRAWN
+            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) >= MIN_DRAWN)) edge = true;
             if(height >= Water.RENDER_HEIGHT) {
                 sum += height * 10.0F;
                 count += 10;

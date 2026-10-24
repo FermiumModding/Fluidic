@@ -31,7 +31,13 @@ public final class ChunkLight {
      * so the bottom of a pool one block deep is lit like dry ground and only deeper water darkens it.
      */
     public static int sky(int sky, int x, int y, int z) {
-        if(sky == 0 || !DRAWING.get()[0] || y >= 255 || ClientWaterCache.heightAnyThread(x, y, z) == 0) return sky;
+        if(!DRAWING.get()[0]) return sky;
+        return drawnSky(sky, x, y, z);
+    }
+
+    /** {@link #sky} for a block access that only draws chunks */
+    public static int drawnSky(int sky, int x, int y, int z) {
+        if(sky == 0 || y < 0 || y >= 255 || ClientWaterCache.heightAnyThread(x, y, z) == 0) return sky;
         return dimmed(sky, x, y + 1, z);
     }
 

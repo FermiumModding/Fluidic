@@ -124,10 +124,10 @@ public final class ClientWaterCache {
             meshChanged = true;
             // Cells on the edge are drawn against the sections beside them, diagonal ones too since corners are shared
             if(x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15) borders |= WaterRenderer.around(x, y, z);
-            // Settled water culls its faces against simulated water, redraw it when water appears or vanishes
-            if(ForgeConfigHandler.client.renderWater && ((a == 0) != (b == 0) || (a >= FluidicWater.MIN_DRAWN) != (b >= FluidicWater.MIN_DRAWN)) && (besideSettledWater(mc, pos, ox + x, oy + y, oz + z)
-                    // Water above simulated water raises the corners of water blocks beside that, see FluidicWater.surfaceCorner
-                    || besideSettledWater(mc, pos, ox + x, oy + y - 1, oz + z))) {
+            // Settled water culls its faces against simulated water and its corners take that water's shape: water
+            // above raises them, a thin layer's edge drops them, see FluidicWater.surfaceCorner. Redrawn when the shape
+            // changes, diagonally too since a corner is shared by four blocks.
+            if(ForgeConfigHandler.client.renderWater && FluidicWater.shapeOf(a) != FluidicWater.shapeOf(b) && nearSettledWater(mc, pos, ox + x, oy + y, oz + z)) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);
             }
             // The blocks below are lit through it, see ChunkLight. Drawn by the chunks, its redraw reaches them.
@@ -155,10 +155,14 @@ public final class ClientWaterCache {
         return true;
     }
 
-    private static boolean besideSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {
-        for(int dir = 0; dir < 6; dir++) {
-            pos.setPos(x + Water.DX[dir], y + Water.DY[dir], z + Water.DZ[dir]);
-            if(FluidicWater.isWater(mc.world.getBlockState(pos))) return true;
+    /** Whether a water block is in the blocks around a position, the ones SettledRedraws redraws for it */
+    private static boolean nearSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {
+        for(int dy = -1; dy <= 1; dy++) {
+            for(int dx = -1; dx <= 1; dx++) {
+                for(int dz = -1; dz <= 1; dz++) {
+                    if((dx != 0 || dy != 0 || dz != 0) && FluidicWater.isWater(mc.world.getBlockState(pos.setPos(x + dx, y + dy, z + dz)))) return true;
+                }
+            }
         }
         return false;
     }

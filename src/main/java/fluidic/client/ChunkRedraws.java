@@ -7,6 +7,7 @@ import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
@@ -115,13 +116,23 @@ public final class ChunkRedraws {
             for(int n = 0; n < cells.size() && all; n++) all = drawn >= WATER_CHANGES.get(cells.getLong(n)) >> 1;
             if(!all && now - WATER_CHANGE_SINCE.get(entry.getLongKey()) < WATER_CHANGE_TIMEOUT) continue;
             WATER_CHANGE_SINCE.remove(entry.getLongKey());
+            // Simulated water beside the changed blocks shares its corners with them, across section borders too
+            LongOpenHashSet around = new LongOpenHashSet();
             for(int n = 0; n < cells.size(); n++) {
                 WATER_CHANGES.remove(cells.getLong(n));
                 OLD_STATES.remove(cells.getLong(n));
+                BlockPos cell = BlockPos.fromLong(cells.getLong(n));
+                for(int dx = -1; dx <= 1; dx++) {
+                    for(int dy = -1; dy <= 1; dy++) {
+                        for(int dz = -1; dz <= 1; dz++) {
+                            int y = cell.getY() + dy;
+                            if(y >= 0 && y <= 255) around.add(Water.sectionKey((cell.getX() + dx) >> 4, y >> 4, (cell.getZ() + dz) >> 4));
+                        }
+                    }
+                }
             }
-            long key = entry.getLongKey();
             it.remove();
-            sections.accept(key);
+            for(long section : around) sections.accept(section);
         }
     }
 
