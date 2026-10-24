@@ -96,6 +96,21 @@ public final class SimulatedWater {
         return false;
     }
 
+    /** Whether any simulated water is in the blocks a bounding box reaches into, like World.containsAnyLiquid */
+    public static boolean containsWater(World world, AxisAlignedBB box) {
+        int minX = MathHelper.floor(box.minX), maxX = MathHelper.ceil(box.maxX);
+        int minY = MathHelper.floor(box.minY), maxY = MathHelper.ceil(box.maxY);
+        int minZ = MathHelper.floor(box.minZ), maxZ = MathHelper.ceil(box.maxZ);
+        for(int x = minX; x < maxX; x++) {
+            for(int y = minY; y < maxY; y++) {
+                for(int z = minZ; z < maxZ; z++) {
+                    if(height(world, x, y, z) > 0) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Whether a bounding box reaches into simulated water that is over half a block deep */
     public static boolean isInWater(World world, AxisAlignedBB box) {
         int minX = MathHelper.floor(box.minX), maxX = MathHelper.ceil(box.maxX);

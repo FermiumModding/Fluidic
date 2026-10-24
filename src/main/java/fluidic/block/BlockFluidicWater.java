@@ -347,7 +347,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         BlockPos offset = pos.offset(side);
         boolean simulated = FluidicWater.simHeight(offset) > 0;
         // Simulated water is drawn by the client renderer, its top and bottom meet this water without a face
-        if(simulated && side.getAxis() == EnumFacing.Axis.Y) return false;
+        // Not a trace too thin to draw resting on it, see FluidicWater.MIN_DRAWN
+        if(simulated && (side == EnumFacing.DOWN || FluidicWater.simHeight(offset) >= FluidicWater.MIN_DRAWN)) return false;
         // Water reaches into a thin block beside it like a glass pane, drawn by the block up to the glass
         if(side.getAxis() != EnumFacing.Axis.Y) {
             IBlockState beside = world.getBlockState(offset);

@@ -10,7 +10,9 @@ import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.state.IBlockState;
@@ -67,6 +69,21 @@ public final class WaterRenderer {
     private static int red, green, blue;
     /** The cell being built is a thin layer resting on a full block of water, see FluidicWater.isFilm */
     private static boolean film;
+    /** Per section rebuild: corner levels by local corner, 0-16 along x and z, and water colours by column */
+    private static final float[] corners = new float[17 * 17 * 16];
+    private static final int[] cornerGeneration = new int[17 * 17 * 16];
+    private static final int[] colors = new int[16 * 16];
+    private static final int[] colorGeneration = new int[16 * 16];
+    /** Counts section rebuilds, entries from an earlier one are stale */
+    private static int generation;
+    /** Whether the last corner worked out was at a door */
+    private static boolean cornerDoors;
+    /** The section being rebuilt */
+    private static long building;
+    /** The blocks around the section being rebuilt */
+    private static final SectionBlocks BLOCKS = new SectionBlocks();
+    /** Sections of water blocks not yet drawn again under thin layers, see filmShown, to the meshes drawn without them */
+    private static final Long2ObjectOpenHashMap<LongOpenHashSet> FILM_WAITS = new Long2ObjectOpenHashMap<>();
 
     private WaterRenderer() {}
 
@@ -111,9 +128,15 @@ public final class WaterRenderer {
         if(!ChunkWater.isActive()) for(long key : ClientWaterCache.keys()) DIRTY.add(key);
     }
 
+    /** The client dropped a section, nothing waits for it to be drawn again */
+    static void unloadSection(long key) {
+        FILM_WAITS.remove(key);
+    }
+
     static void clear() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
+        FILM_WAITS.clear();
         DIRTY.clear();
         URGENT.clear();
     }
@@ -132,16 +155,16 @@ public final class WaterRenderer {
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
         // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
-        ChunkRedraws.caughtUp(WaterRenderer::markUrgent);
+        ChunkRedraws.caughtUp(WaterRenderer::markUrgent, WaterRenderer::filmsCaughtUp);
         // Sections beside changed blocks go first and past the count, vanilla may draw the change in this same frame
         long urgentDeadline = System.nanoTime() + URGENT_NANOS;
         while(!URGENT.isEmpty() && System.nanoTime() < urgentDeadline) {
             long key = URGENT.removeFirstLong();
             DIRTY.remove(key);
-            rebuildGroup(world, key);
+            rebuildGroup(world, key, MAX_GROUP, urgentDeadline);
         }
         long deadline = System.nanoTime() + REBUILD_NANOS;
-        while(!DIRTY.isEmpty() && budget > 0 && System.nanoTime() < deadline) budget -= rebuildGroup(world, DIRTY.removeFirstLong());
+        while(!DIRTY.isEmpty() && budget > 0 && System.nanoTime() < deadline) budget -= rebuildGroup(world, DIRTY.removeFirstLong(), Math.min(budget, MAX_GROUP), deadline);
         if(DISPLAY_LISTS.isEmpty()) return;
 
         float partialTicks = event.getPartialTicks();
@@ -230,13 +253,14 @@ public final class WaterRenderer {
     /**
      * Rebuilds a section and the sections around it waiting for a rebuild too, in the same frame. Sections share the
      * corners along their borders, rebuilt in different frames the two sides would not meet for a frame and open gaps,
-     * as a wake spreading through water crosses them. Returns how many were rebuilt.
+     * as a wake spreading through water crosses them. Within the frame's budget, in busy weather nearly every section
+     * waits and the group would take them all. Returns how many were rebuilt.
      */
-    private static int rebuildGroup(WorldClient world, long first) {
+    private static int rebuildGroup(WorldClient world, long first, int limit, long deadline) {
         LongArrayList group = new LongArrayList();
         group.add(first);
         int built = 0;
-        for(; built < group.size() && built < MAX_GROUP; built++) {
+        for(; built < group.size() && built < limit && (built == 0 || System.nanoTime() < deadline); built++) {
             long key = group.getLong(built);
             rebuild(world, key);
             int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
@@ -260,12 +284,16 @@ public final class WaterRenderer {
         boolean any = false;
         if(heights != null) {
             int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
+            // Corners and colours worked out for this section only
+            generation++;
+            building = key;
+            SectionBlocks blocks = BLOCKS.begin(world, ox, oy, oz);
             BUFFER.begin(GL11.GL_QUADS, DefaultVertexFormats.BLOCK);
             RuntimeException failed = null;
             try {
                 for(int i = 0; i < 4096; i++) {
                     if(heights[i] == 0) continue;
-                    any |= buildCell(world, ox, oy, oz, i & 15, i >> 8, (i >> 4) & 15);
+                    any |= buildCell(blocks, ox, oy, oz, i & 15, i >> 8, (i >> 4) & 15);
                 }
             }
             catch(RuntimeException ex) {
@@ -300,20 +328,27 @@ public final class WaterRenderer {
     }
 
     /** Adds the visible faces of one water cell in section local coordinates, returns whether any were added */
-    private static boolean buildCell(WorldClient world, int ox, int oy, int oz, int lx, int ly, int lz) {
+    private static boolean buildCell(SectionBlocks world, int ox, int oy, int oz, int lx, int ly, int lz) {
         int x = ox + lx, y = oy + ly, z = oz + lz;
         // A water block the chunk on screen still shows, or already shows, draws this water. Drawing both doubles it,
         // darker, for a moment: waking water is sent before its block goes, settled water stays until the chunk has it.
         if(FluidicWater.isWater(shown(world, x, y, z))) return false;
+        // A trace of water resting on water is not drawn, see FluidicWater.MIN_DRAWN
+        if(FluidicWater.isTrace(world, new BlockPos(x, y, z), ClientWaterCache.height(x, y, z))) return false;
         float surface = surface(world, x, y, z);
-        int light = world.getCombinedLight(POS.setPos(x, y, z), 0);
-        // Same biome tint vanilla water gets, the 1.12 water texture is already blue
-        int color = BiomeColorHelper.getWaterColorAtPos(world, POS);
+        int light = world.light(x, y, z);
+        // Same biome tint vanilla water gets, the 1.12 water texture is already blue. The same for the whole column.
+        int column16 = lx * 16 + lz;
+        if(colorGeneration[column16] != generation) {
+            colorGeneration[column16] = generation;
+            colors[column16] = BiomeColorHelper.getWaterColorAtPos(world, POS.setPos(x, y, z));
+        }
+        int color = colors[column16];
         red = color >> 16 & 255;
         green = color >> 8 & 255;
         blue = color & 255;
         // Sky light dimmed by the simulated water, like water blocks dim it, the surface lit from above like theirs
-        int above = world.getCombinedLight(POS.setPos(x, y + 1, z), 0) >> 20 & 15;
+        int above = world.light(x, y + 1, z) >> 20 & 15;
         int skyLevel = Math.max(ChunkLight.dimmed(light >> 20 & 15, x, y, z), ChunkLight.dimmed(above, x, y + 1, z));
         int sky = skyLevel << 4, block = light & 65535;
         boolean added = false;
@@ -324,10 +359,10 @@ public final class WaterRenderer {
         film = filmShown(world, x, y, z);
         // The corners as the water around shares them, a column's sides reach down to these
         BlockPos cell = new BlockPos(x, y, z);
-        float s00 = corner(world, x, y, z, surface, cell);
-        float s10 = corner(world, x + 1, y, z, surface, cell);
-        float s11 = corner(world, x + 1, y, z + 1, surface, cell);
-        float s01 = corner(world, x, y, z + 1, surface, cell);
+        float s00 = sharedCorner(world, x, y, z, lx, ly, lz, surface, cell);
+        float s10 = sharedCorner(world, x + 1, y, z, lx + 1, ly, lz, surface, cell);
+        float s11 = sharedCorner(world, x + 1, y, z + 1, lx + 1, ly, lz + 1, surface, cell);
+        float s01 = sharedCorner(world, x, y, z + 1, lx, ly, lz + 1, surface, cell);
         // Water inside a door is level with the water on its open side. Against the door only its own water counts,
         // which stays simulated a little below the water around it, and the surface would slope down to the door.
         EnumFacing door = Terrain.doorSide(world, cell, world.getBlockState(cell));
@@ -383,15 +418,15 @@ public final class WaterRenderer {
     }
 
     /** Whether a block beside is a thin block like a glass pane, the water reaching into it is drawn by {@link #thinBlocks} */
-    private static boolean isThin(WorldClient world, int x, int y, int z) {
-        return FluidicWater.isThin(world, world.getBlockState(POS.setPos(x, y, z)));
+    private static boolean isThin(SectionBlocks world, int x, int y, int z) {
+        return FluidicWater.isThin(world, world.state(x, y, z));
     }
 
     /**
      * Draws the simulated water reaching into thin blocks around a cell, like glass panes, the ones this cell draws for,
      * see ThinBlockWater.drawsFor. The water inside a corner of panes only touches its cell diagonally.
      */
-    private static boolean thinBlocks(WorldClient world, int x, int y, int z, int lx, int ly, int lz, int sky, int block) {
+    private static boolean thinBlocks(SectionBlocks world, int x, int y, int z, int lx, int ly, int lz, int sky, int block) {
         boolean added = false;
         BlockPos water = new BlockPos(x, y, z);
         for(int dx = -1; dx <= 1; dx++) {
@@ -415,7 +450,7 @@ public final class WaterRenderer {
      * At a ledge, where the neighbour is empty with water below it, the face reaches down to that water like water
      * running over the edge, instead of leaving the bank between the two showing.
      */
-    private static boolean side(WorldClient world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top0, float top1,
+    private static boolean side(SectionBlocks world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top0, float top1,
                                 float edge0, float edge1, float floor, boolean column, int sky, int block) {
         if(isOpaque(world, nx, y, nz)) return false;
         float neighbor = surface(world, nx, y, nz);
@@ -452,7 +487,7 @@ public final class WaterRenderer {
      * Rendered water level of a cell, simulated or a water block: -1 for no water, 1 when water continues above.
      * Uses the same scale as vanilla's fluid renderer so simulated water and water blocks meet.
      */
-    private static float surface(WorldClient world, int x, int y, int z) {
+    private static float surface(SectionBlocks world, int x, int y, int z) {
         int height = ClientWaterCache.height(x, y, z);
         if(height == 0) return liquidHeight(world, x, y, z);
         if(raised(world, x, y + 1, z)) return 1.0F;
@@ -462,7 +497,7 @@ public final class WaterRenderer {
     }
 
     /** Rendered level of a water block, -1 if there is none */
-    private static float liquidHeight(WorldClient world, int x, int y, int z) {
+    private static float liquidHeight(SectionBlocks world, int x, int y, int z) {
         if(y < 0 || y > 255) return -1.0F;
         IBlockState state = shown(world, x, y, z);
         if(!state.getMaterial().isLiquid()) return -1.0F;
@@ -474,7 +509,7 @@ public final class WaterRenderer {
     }
 
     /** Surface of a water block ignoring any water above it, 1 for anything else so nothing reaches into it */
-    private static float liquidLevel(WorldClient world, int x, int y, int z) {
+    private static float liquidLevel(SectionBlocks world, int x, int y, int z) {
         if(y < 0 || y > 255) return 1.0F;
         IBlockState state = shown(world, x, y, z);
         if(!state.getMaterial().isLiquid()) return 1.0F;
@@ -484,23 +519,42 @@ public final class WaterRenderer {
     }
 
     /**
+     * A corner as {@link #corner} works it out, once per section rebuild: the four cells around it share it. Corners at a
+     * door depend on the cell asking, they are not kept.
+     */
+    private static float sharedCorner(SectionBlocks world, int x, int y, int z, int cx, int ly, int cz, float fallback, BlockPos cell) {
+        int index = (cx * 17 + cz) * 16 + ly;
+        if(cornerGeneration[index] != generation) {
+            cornerDoors = false;
+            // NaN where the cell's own surface is used
+            float s = corner(world, x, y, z, Float.NaN, cell);
+            if(cornerDoors) return Float.isNaN(s) ? fallback : s;
+            cornerGeneration[index] = generation;
+            corners[index] = s;
+        }
+        float s = corners[index];
+        return Float.isNaN(s) ? fallback : s;
+    }
+
+    /**
      * Level of the corner at the low x/z edge of (x, z), averaged over the four cells around it exactly like
      * water blocks do (FluidicWater.cornerHeight, used by vanilla's fluid renderer), so both kinds
      * of water share their corners: solid blocks are left out, open blocks count as dry and near full cells
      * weigh more.
      */
-    private static float corner(WorldClient world, int x, int y, int z, float fallback, BlockPos cell) {
+    private static float corner(SectionBlocks world, int x, int y, int z, float fallback, BlockPos cell) {
         // Corners touching water blocks follow the blocks alone, like FluidicWater.cornerHeight, the blocks are only
         // redrawn when simulated water appears or vanishes beside them, not every time it moves
         boolean blocks = false, doors = false;
         for(int dx = -1; dx <= 0; dx++) {
             for(int dz = -1; dz <= 0; dz++) {
-                IBlockState state = world.getBlockState(POS.setPos(x + dx, y, z + dz));
+                IBlockState state = world.state(x + dx, y, z + dz);
                 blocks |= state.getMaterial().isLiquid();
                 doors |= Terrain.isDoor(state);
             }
         }
         if(doors) {
+            cornerDoors = true;
             // Only the water blocks on this side of the door count
             blocks = false;
             for(int dx = -1; dx <= 0; dx++) {
@@ -559,29 +613,40 @@ public final class WaterRenderer {
      * it. Until their chunk is redrawn they show their usual surface, the layer is drawn as plain water down to it, or
      * its edge would hang above them with a gap below.
      */
-    private static boolean filmShown(WorldClient world, int x, int y, int z) {
-        return FluidicWater.isFilm(world, new BlockPos(x, y, z)) && ChunkRedraws.shows(Water.sectionKey(x >> 4, (y - 1) >> 4, z >> 4));
+    private static boolean filmShown(SectionBlocks world, int x, int y, int z) {
+        if(!FluidicWater.isFilm(world, new BlockPos(x, y, z))) return false;
+        long below = Water.sectionKey(x >> 4, (y - 1) >> 4, z >> 4);
+        if(ChunkRedraws.shows(below)) return true;
+        // Drawn again once that section is, see filmsCaughtUp
+        FILM_WAITS.computeIfAbsent(below, k -> new LongOpenHashSet()).add(building);
+        return false;
+    }
+
+    /** A section of water blocks was drawn again, the meshes with thin layers waiting for it are rebuilt to match */
+    private static void filmsCaughtUp(long key) {
+        LongOpenHashSet waiting = FILM_WAITS.remove(key);
+        if(waiting != null) for(long section : waiting) markUrgent(section);
     }
 
     /** Whether water at a block makes the water below reach up to it */
-    private static boolean raised(WorldClient world, int x, int y, int z) {
-        return ClientWaterCache.height(x, y, z) > 0 || isLiquid(world, x, y, z);
+    private static boolean raised(SectionBlocks world, int x, int y, int z) {
+        return ClientWaterCache.height(x, y, z) >= FluidicWater.MIN_DRAWN || isLiquid(world, x, y, z);
     }
 
     /** See FluidicWater.sheetWeight */
-    private static int sheetWeight(WorldClient world, int x, int y, int z) {
+    private static int sheetWeight(SectionBlocks world, int x, int y, int z) {
         return y > 255 || !raised(world, x, y, z) ? 0 : FluidicWater.sheetWeight(world, new BlockPos(x, y, z));
     }
 
-    private static boolean isSolid(WorldClient world, int x, int y, int z) {
-        return y < 0 || y > 255 || world.getBlockState(POS.setPos(x, y, z)).getMaterial().isSolid();
+    private static boolean isSolid(SectionBlocks world, int x, int y, int z) {
+        return y < 0 || y > 255 || world.state(x, y, z).getMaterial().isSolid();
     }
 
-    private static boolean isOpaque(WorldClient world, int x, int y, int z) {
-        return y >= 0 && y <= 255 && world.getBlockState(POS.setPos(x, y, z)).isOpaqueCube();
+    private static boolean isOpaque(SectionBlocks world, int x, int y, int z) {
+        return y >= 0 && y <= 255 && world.state(x, y, z).isOpaqueCube();
     }
 
-    private static boolean isLiquid(WorldClient world, int x, int y, int z) {
+    private static boolean isLiquid(SectionBlocks world, int x, int y, int z) {
         return y >= 0 && y <= 255 && shown(world, x, y, z).getMaterial().isLiquid();
     }
 
@@ -589,7 +654,7 @@ public final class WaterRenderer {
      * The block at a position as the chunk on screen shows it. Water blocks that came, went or changed level show as they
      * were until their chunk is redrawn, simulated water meets them as they are drawn, without gaps between the two.
      */
-    private static IBlockState shown(WorldClient world, int x, int y, int z) {
-        return ChunkRedraws.shownState(x, y, z, world.getBlockState(POS.setPos(x, y, z)));
+    private static IBlockState shown(SectionBlocks world, int x, int y, int z) {
+        return ChunkRedraws.shownState(x, y, z, world.state(x, y, z));
     }
 }

@@ -110,6 +110,7 @@ public final class ClientWaterCache {
         // Work out what changed, so only what depends on it is redrawn
         int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
         int borders = 0;
+        boolean meshChanged = old == null || heights == null;
         int x0 = 16, y0 = 16, z0 = 16, x1 = -1, y1 = -1, z1 = -1;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for(int i = 0; i < 4096; i++) {
@@ -118,10 +119,13 @@ public final class ClientWaterCache {
             int x = i & 15, y = i >> 8, z = (i >> 4) & 15;
             x0 = Math.min(x0, x); y0 = Math.min(y0, y); z0 = Math.min(z0, z);
             x1 = Math.max(x1, x); y1 = Math.max(y1, y); z1 = Math.max(z1, z);
+            // Rain falling on a pool keeps changing traces all over it that no mesh shows
+            if(unseenTrace(mc, pos, ox + x, oy + y, oz + z, a, b)) continue;
+            meshChanged = true;
             // Cells on the edge are drawn against the sections beside them, diagonal ones too since corners are shared
             if(x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15) borders |= WaterRenderer.around(x, y, z);
             // Settled water culls its faces against simulated water, redraw it when water appears or vanishes
-            if(ForgeConfigHandler.client.renderWater && (a == 0) != (b == 0) && (besideSettledWater(mc, pos, ox + x, oy + y, oz + z)
+            if(ForgeConfigHandler.client.renderWater && ((a == 0) != (b == 0) || (a >= FluidicWater.MIN_DRAWN) != (b >= FluidicWater.MIN_DRAWN)) && (besideSettledWater(mc, pos, ox + x, oy + y, oz + z)
                     // Water above simulated water raises the corners of water blocks beside that, see FluidicWater.surfaceCorner
                     || besideSettledWater(mc, pos, ox + x, oy + y - 1, oz + z))) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);
@@ -131,9 +135,24 @@ public final class ClientWaterCache {
                 for(int dy = 0; dy <= ChunkLight.reach(); dy++) SettledRedraws.add(ox + x, oy + y - dy, oz + z);
             }
         }
-        WaterRenderer.markDirty(key, borders);
+        if(meshChanged) WaterRenderer.markDirty(key, borders);
         // Drawn by the chunks, the changed blocks and those beside them are redrawn
         if(ChunkWater.isActive() && x1 >= 0) ChunkWater.redraw(ox + x0, oy + y0 - ChunkLight.reach(), oz + z0, ox + x1, oy + y1, oz + z1);
+    }
+
+    /**
+     * A trace of water on water that stays one, see FluidicWater.MIN_DRAWN. It is not drawn, and only the corners of drawn
+     * simulated water beside it at its level average it in, with none there no mesh changes.
+     */
+    private static boolean unseenTrace(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z, int a, int b) {
+        if(a == 0 || b == 0 || a >= FluidicWater.MIN_DRAWN || b >= FluidicWater.MIN_DRAWN) return false;
+        if(!FluidicWater.isTrace(mc.world, pos.setPos(x, y, z), b)) return false;
+        for(int dx = -1; dx <= 1; dx++) {
+            for(int dz = -1; dz <= 1; dz++) {
+                if((dx != 0 || dz != 0) && height(x + dx, y, z + dz) >= FluidicWater.MIN_DRAWN) return false;
+            }
+        }
+        return true;
     }
 
     private static boolean besideSettledWater(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z) {
@@ -149,6 +168,7 @@ public final class ClientWaterCache {
         for(int sy = 0; sy < 16; sy++) {
             long key = Water.sectionKey(cx, sy, cz);
             DEFERRED.remove(key);
+            WaterRenderer.unloadSection(key);
             if(SECTIONS.remove(key) != null) WaterRenderer.markDirty(key, ALL_BORDERS);
         }
     }

@@ -93,9 +93,10 @@ public final class ChunkRedraws {
 
     /**
      * Passes the sections now drawn with all their water block changes, their simulated water is drawn again to
-     * match, and forgets the changes
+     * match, and forgets the changes. Sections drawn again against simulated water that changed, see {@link #shows}, go
+     * to redrawn.
      */
-    static void caughtUp(LongConsumer sections) {
+    static void caughtUp(LongConsumer sections, LongConsumer redrawn) {
         long now = System.nanoTime();
         for(ObjectIterator<Long2LongMap.Entry> it = STALE.long2LongEntrySet().fastIterator(); it.hasNext(); ) {
             Long2LongMap.Entry entry = it.next();
@@ -103,9 +104,7 @@ public final class ChunkRedraws {
             if(!shows(key) && now - STALE_SINCE.get(key) < WATER_CHANGE_TIMEOUT) continue;
             it.remove();
             STALE_SINCE.remove(key);
-            // The simulated water above it, resting on it, is drawn against it too
-            sections.accept(key);
-            if(Water.keyY(key) < 15) sections.accept(Water.sectionKey(Water.keyX(key), Water.keyY(key) + 1, Water.keyZ(key)));
+            redrawn.accept(key);
         }
         if(WATER_CHANGE_CELLS.isEmpty()) return;
         for(ObjectIterator<Long2ObjectMap.Entry<LongArrayList>> it = WATER_CHANGE_CELLS.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {

@@ -1,6 +1,8 @@
 package fluidic.mixin.vanilla;
 
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import fluidic.block.FluidicWater;
 import fluidic.sim.SimulatedWater;
 import net.minecraft.block.material.Material;
@@ -50,6 +52,18 @@ public abstract class EntityMixin {
     private boolean fluidic_inSimulatedWater(boolean inWater) {
         AxisAlignedBB box = getEntityBoundingBox().grow(0.0D, -0.4000000059604645D, 0.0D).shrink(0.001D);
         return SimulatedWater.handleEntity((Entity)(Object)this, box) || inWater;
+    }
+
+    /**
+     * Swimming against a wall lifts entities over it, like out of the water onto a ledge, only where no water is above
+     * them. Simulated water above keeps them down too, they would otherwise hop up the wall like auto jump.
+     */
+    @WrapOperation(
+            method = "isLiquidPresentInAABB",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/World;containsAnyLiquid(Lnet/minecraft/util/math/AxisAlignedBB;)Z")
+    )
+    private boolean fluidic_simulatedWaterPresent(World world, AxisAlignedBB box, Operation<Boolean> original) {
+        return original.call(world, box) || SimulatedWater.containsWater(world, box);
     }
 
     /**

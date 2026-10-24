@@ -149,6 +149,20 @@ public final class FluidicWater {
      * the edge of the layer slopes down onto the pool, see surfaceCorner. Unlike a stream falling into a pool, which
      * has water above it.
      */
+    /**
+     * Least simulated water resting on water that is drawn, 1/16 of a block. Traces left over as a pool evens out wander
+     * over its surface. Drawn, each would raise the water under it to the top of its block, a whole raised block
+     * moving across the pool with it.
+     */
+    public static final int MIN_DRAWN = 16;
+
+    /** Whether simulated water resting on water at a position is too little to draw, see MIN_DRAWN */
+    public static boolean isTrace(IBlockAccess world, BlockPos pos, int height) {
+        if(height <= 0 || height >= MIN_DRAWN || pos.getY() <= 0) return false;
+        BlockPos below = pos.down();
+        return world.getBlockState(below).getMaterial().isLiquid() || simHeight(below) > 0;
+    }
+
     /** Water below a thin layer counts as full from this height, 7/8 of a block */
     private static final int FILM_BASE = 255 * 7 / 8;
     /** Thickest water that counts as a thin layer, 3/8 of a block. The partly drained top of a deeper pool is no layer. */
@@ -158,7 +172,7 @@ public final class FluidicWater {
         if(pos.getY() <= 0 || pos.getY() >= 255) return false;
         int here = waterHeight(world, pos);
         // Moving water under it is full give or take a little, while it evens out
-        return here > 0 && here <= FILM_MAX && waterHeight(world, pos.down()) >= FILM_BASE && waterHeight(world, pos.up()) == 0;
+        return here >= MIN_DRAWN && here <= FILM_MAX && waterHeight(world, pos.down()) >= FILM_BASE && waterHeight(world, pos.up()) == 0;
     }
 
     /** Water in a block, 0-255, a water block or simulated water */
@@ -174,7 +188,7 @@ public final class FluidicWater {
      * layer resting on it, enough alone, 1 for a stream falling in, which takes two side by side, see surfaceCorner
      */
     public static int sheetWeight(IBlockAccess world, BlockPos above) {
-        if(!world.getBlockState(above).getMaterial().isLiquid() && simHeight(above) == 0) return 0;
+        if(!world.getBlockState(above).getMaterial().isLiquid() && simHeight(above) < MIN_DRAWN) return 0;
         return isFilm(world, above) ? 2 : 1;
     }
 
@@ -186,7 +200,7 @@ public final class FluidicWater {
         IBlockState state = world.getBlockState(pos);
         // Water continues up into a water block or into simulated water, like rain landing on a pool. Either way
         // the water below fills its block, without a gap under the water above it.
-        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) > 0;
+        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN;
         if(!state.getMaterial().isLiquid()) {
             int sim = simHeight(pos);
             if(sim > 0) return waterAbove || sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;

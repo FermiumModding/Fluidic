@@ -97,6 +97,8 @@ public final class ChunkWater {
         if(state.getMaterial() != Material.AIR) return state;
         int height = ClientWaterCache.heightAnyThread(x, y, z);
         if(height == 0) return state;
+        // Traces too thin to draw, see FluidicWater.MIN_DRAWN. Without the world here, wherever they rest.
+        if(height < FluidicWater.MIN_DRAWN) return state;
         return FluidicWater.state(Math.max(1, Math.round(height * Water.LEVELS / 255.0F)));
     }
 
