@@ -24,6 +24,6 @@ public abstract class ActiveRenderInfoMixin {
     private static void fluidic_simulatedWaterAtViewpoint(World world, Entity entity, float partialTicks, CallbackInfoReturnable<IBlockState> cir) {
         if(cir.getReturnValue().getMaterial().isLiquid()) return;
         Vec3d eyes = ActiveRenderInfo.projectViewFromEntity(entity, partialTicks);
-        if(SimulatedWater.isSubmerged(world, eyes.x, eyes.y, eyes.z)) cir.setReturnValue(Blocks.WATER.getDefaultState());
+        if(SimulatedWater.eyesSubmerged(world, eyes.x, eyes.y, eyes.z)) cir.setReturnValue(Blocks.WATER.getDefaultState());
     }
 }

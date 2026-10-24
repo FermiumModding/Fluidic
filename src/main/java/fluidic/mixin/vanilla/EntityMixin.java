@@ -91,7 +91,7 @@ public abstract class EntityMixin {
     @Inject(method = "isInsideOfMaterial", at = @At("RETURN"), cancellable = true)
     private void fluidic_headInSimulatedWater(Material material, CallbackInfoReturnable<Boolean> cir) {
         if(material == Material.WATER && !cir.getReturnValueZ() && !(getRidingEntity() instanceof EntityBoat)
-                && SimulatedWater.isSubmerged(world, posX, posY + getEyeHeight(), posZ)) {
+                && SimulatedWater.eyesSubmerged(world, posX, posY + getEyeHeight(), posZ)) {
             cir.setReturnValue(true);
         }
     }

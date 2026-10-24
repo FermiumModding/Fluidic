@@ -29,6 +29,6 @@ public abstract class EntityRendererMixin {
         Entity view = Minecraft.getMinecraft().getRenderViewEntity();
         if(view == null) return state;
         Vec3d eyes = ActiveRenderInfo.projectViewFromEntity(view, partialTicks);
-        return SimulatedWater.isSubmerged(world, eyes.x, eyes.y, eyes.z) ? Blocks.WATER.getDefaultState() : state;
+        return SimulatedWater.eyesSubmerged(world, eyes.x, eyes.y, eyes.z) ? Blocks.WATER.getDefaultState() : state;
     }
 }

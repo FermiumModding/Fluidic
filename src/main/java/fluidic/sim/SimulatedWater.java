@@ -243,4 +243,24 @@ public final class SimulatedWater {
         float surface = height(world, bx, by + 1, bz) > 0 ? 1.0F : height / 255.0F * RENDER_HEIGHT;
         return y < by + surface;
     }
+
+    /**
+     * Whether eyes are under water vanilla does not see: simulated water, or the water beside a thin block like a glass
+     * pane, which is drawn reaching into its block up to the glass. The glass runs through the middle of the block, so
+     * the water reaching the eyes is that beside the quarter of the block they are in.
+     */
+    public static boolean eyesSubmerged(World world, double x, double y, double z) {
+        if(isSubmerged(world, x, y, z)) return true;
+        BlockPos pos = new BlockPos(x, y, z);
+        if(!FluidicWater.isThin(world, world.getBlockState(pos))) return false;
+        int sx = x - pos.getX() < 0.5D ? -1 : 1, sz = z - pos.getZ() < 0.5D ? -1 : 1;
+        return underSurface(world, pos.add(sx, 0, 0), y) || underSurface(world, pos.add(0, 0, sz), y) || underSurface(world, pos.add(sx, 0, sz), y);
+    }
+
+    /** Whether a height in a block lies under the surface of its water, a water block or simulated water */
+    private static boolean underSurface(World world, BlockPos pos, double y) {
+        IBlockState state = world.getBlockState(pos);
+        if(FluidicWater.isWater(state)) return y < pos.getY() + FluidicWater.surface(world, pos, state);
+        return isSubmerged(world, pos.getX() + 0.5D, y, pos.getZ() + 0.5D);
+    }
 }
