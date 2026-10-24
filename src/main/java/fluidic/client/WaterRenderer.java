@@ -63,7 +63,7 @@ public final class WaterRenderer {
     /** Surface height of a full block of water as vanilla renders it */
     private static final float FULL_HEIGHT = Water.RENDER_HEIGHT;
 
-    private static TextureAtlasSprite still;
+    private static TextureAtlasSprite still, flow;
     private static int red, green, blue;
     /** The cell being built is a thin layer resting on a full block of water, see FluidicWater.isFilm */
     private static boolean film;
@@ -127,6 +127,8 @@ public final class WaterRenderer {
         if(world == null || view == null || !ForgeConfigHandler.client.renderWater || ChunkWater.isActive()) return;
 
         still = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_still");
+        // Sides run down like vanilla's water, which draws them with the flowing texture
+        flow = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_flow");
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
         // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
@@ -434,11 +436,11 @@ public final class WaterRenderer {
             bottom0 = bottom1 = bottom;
         }
         if(top0 <= bottom0 && top1 <= bottom1) return false;
-        float u0 = still.getMinU(), u1 = still.getInterpolatedU(8.0D);
-        vertex(x0, ly + bottom0, z0, u0, still.getInterpolatedV((1.0F - bottom0) * 8.0F), sky, block);
-        vertex(x0, ly + Math.max(top0, bottom0), z0, u0, still.getInterpolatedV((1.0F - top0) * 8.0F), sky, block);
-        vertex(x1, ly + Math.max(top1, bottom1), z1, u1, still.getInterpolatedV((1.0F - top1) * 8.0F), sky, block);
-        vertex(x1, ly + bottom1, z1, u1, still.getInterpolatedV((1.0F - bottom1) * 8.0F), sky, block);
+        float u0 = flow.getMinU(), u1 = flow.getInterpolatedU(8.0D);
+        vertex(x0, ly + bottom0, z0, u0, flow.getInterpolatedV(Math.min(16.0F, (1.0F - bottom0) * 8.0F)), sky, block);
+        vertex(x0, ly + Math.max(top0, bottom0), z0, u0, flow.getInterpolatedV(Math.min(16.0F, (1.0F - top0) * 8.0F)), sky, block);
+        vertex(x1, ly + Math.max(top1, bottom1), z1, u1, flow.getInterpolatedV(Math.min(16.0F, (1.0F - top1) * 8.0F)), sky, block);
+        vertex(x1, ly + bottom1, z1, u1, flow.getInterpolatedV(Math.min(16.0F, (1.0F - bottom1) * 8.0F)), sky, block);
         return true;
     }
 

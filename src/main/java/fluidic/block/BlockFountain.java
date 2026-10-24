@@ -87,7 +87,25 @@ public class BlockFountain extends Block {
     public void updateTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
         if(world.isRemote || !state.getValue(POWERED)) return;
         pour(world, pos.offset(state.getValue(FACING)));
+        if(!world.provider.doesWaterVaporize()) splash((WorldServer)world, pos, state.getValue(FACING));
         world.scheduleUpdate(pos, this, POUR_TICKS);
+    }
+
+    /** Water splashing out of the front, and the sound of running water now and then */
+    private static void splash(WorldServer world, BlockPos pos, EnumFacing facing) {
+        double x = pos.getX() + 0.5D + facing.getXOffset() * 0.55D;
+        double y = pos.getY() + 0.5D + facing.getYOffset() * 0.55D;
+        double z = pos.getZ() + 0.5D + facing.getZOffset() * 0.55D;
+        for(int n = 0; n < 4; n++) {
+            // A count of 0 sends one particle moving by the offsets, out of the front and a little up
+            double spread = 0.15D;
+            world.spawnParticle(EnumParticleTypes.WATER_SPLASH, x + (world.rand.nextDouble() - 0.5D) * 0.4D, y + (world.rand.nextDouble() - 0.5D) * 0.4D,
+                    z + (world.rand.nextDouble() - 0.5D) * 0.4D, 0, facing.getXOffset() * 0.3D + (world.rand.nextDouble() - 0.5D) * spread,
+                    facing.getYOffset() * 0.3D + 0.1D + world.rand.nextDouble() * spread, facing.getZOffset() * 0.3D + (world.rand.nextDouble() - 0.5D) * spread, 1.0D);
+        }
+        if(world.rand.nextInt(12) == 0) {
+            world.playSound(null, x, y, z, SoundEvents.BLOCK_WATER_AMBIENT, SoundCategory.BLOCKS, 0.4F + world.rand.nextFloat() * 0.2F, 0.8F + world.rand.nextFloat() * 0.4F);
+        }
     }
 
     private static void pour(World world, BlockPos front) {
