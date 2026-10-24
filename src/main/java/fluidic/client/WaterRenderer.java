@@ -161,6 +161,9 @@ public final class WaterRenderer {
         mc.entityRenderer.enableLightmap();
         RenderHelper.disableStandardItemLighting();
         mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        // Mipmapped like the chunks draw water, at a distance or a slant the water texture sampled at full size lets more or
+        // less of the blocks behind it through than the chunks' water does
+        mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE).setBlurMipmap(false, mc.gameSettings.mipmapLevels > 0);
         GlStateManager.enableBlend();
         GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
         GlStateManager.enableDepth();
@@ -189,6 +192,7 @@ public final class WaterRenderer {
         GlStateManager.enableCull();
         GlStateManager.depthMask(true);
         GlStateManager.disableBlend();
+        mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE).restoreLastBlurMipmap();
         mc.entityRenderer.disableLightmap();
         GlStateManager.disableFog();
         GlStateManager.popMatrix();

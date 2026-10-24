@@ -25,9 +25,14 @@ public final class ChunkLight {
         DRAWING.get()[0] = false;
     }
 
-    /** Sky light at a block as a chunk being drawn sees it, dimmed by the simulated water it is in */
+    /**
+     * Sky light at a block as a chunk being drawn sees it, in simulated water dimmed by the simulated water above it. A
+     * water block gives the blocks around it the light above it when that is brighter, BlockLiquid.getPackedLightmapCoords,
+     * so the bottom of a pool one block deep is lit like dry ground and only deeper water darkens it.
+     */
     public static int sky(int sky, int x, int y, int z) {
-        return sky == 0 || !DRAWING.get()[0] ? sky : dimmed(sky, x, y, z);
+        if(sky == 0 || !DRAWING.get()[0] || y >= 255 || ClientWaterCache.heightAnyThread(x, y, z) == 0) return sky;
+        return dimmed(sky, x, y + 1, z);
     }
 
     /**
