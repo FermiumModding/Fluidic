@@ -118,11 +118,14 @@ public final class WaterSimulation {
     private final Map<UUID, Long2ObjectOpenHashMap<byte[]>> heldBack = new HashMap<>();
     private final Map<UUID, Long2LongOpenHashMap> heldUntil = new HashMap<>();
     /**
-     * Woken blocks, removed one step after their water went into the simulation so clients get the simulated water
-     * before the block disappears. Otherwise the pool shows a hole down to its floor for a moment.
+     * Woken blocks, removed once the step that put their water into the simulation also sent it, so clients get the
+     * simulated water before the block disappears. Otherwise the pool shows a hole down to its floor for a moment.
+     * By position, the step they were woken in.
      */
     private final LongArrayList removals = new LongArrayList();
-    private final LongOpenHashSet removing = new LongOpenHashSet();
+    private final Long2LongOpenHashMap removing = new Long2LongOpenHashMap();
+    /** Steps a woken block waits for its water to go into the simulation, then it stays settled water */
+    private static final long WOKEN_TIMEOUT = 100L;
 
     // ---------------------------------------------------------------- simulation thread state
 
@@ -142,6 +145,8 @@ public final class WaterSimulation {
     /** Block position / mass pairs */
     private final LongArrayList overflowCells = new LongArrayList();
     private StepResult result = new StepResult();
+    /** Water of woken blocks went in this step, see doAddWoken */
+    private boolean wokenThisStep;
     private int stepCount;
     private final Random random = new Random();
     /** Daytime without rain, written by the server thread every tick */
@@ -200,6 +205,13 @@ public final class WaterSimulation {
     public void addWater(BlockPos pos, int amount) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         enqueue(sim -> sim.doAddWater(x, y, z, amount, true));
+    }
+
+    /** Water of a woken block, the block is removed once the step that adds the water sent it to clients */
+    private void addWoken(BlockPos pos, int amount, byte code) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        long packed = pos.toLong();
+        enqueue(sim -> sim.doAddWoken(x, y, z, amount, packed, code));
     }
 
     public void addRain(BlockPos pos, int amount) {
@@ -364,8 +376,8 @@ public final class WaterSimulation {
     }
 
     private void apply(StepResult step) {
-        // This step added the water of blocks woken by the last one, and its payloads carry it
-        removeWoken();
+        // Blocks woken earlier whose water this step added, its payloads carry it
+        removeWoken(step);
         for(int n = 0; n < step.terrainRequests.size(); n++) {
             long key = step.terrainRequests.getLong(n);
             byte[] terrain = Terrain.snapshot(world, Water.keyX(key), Water.keyY(key), Water.keyZ(key));
@@ -477,17 +489,15 @@ public final class WaterSimulation {
             BlockPos pos = BlockPos.fromLong(step.wakes.getLong(n));
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
-            if(FluidicWater.isWater(state) && !FluidicWater.isReservoir(world, pos, state) && removing.add(pos.toLong())) {
-                removals.add(pos.toLong());
+            if(FluidicWater.isWater(state) && !FluidicWater.isReservoir(world, pos, state) && startRemoving(pos.toLong())) {
                 // The world listener is not told about changes in unpopulated chunks, so open the cell directly
                 setTerrain(pos, WaterSection.OPEN);
-                addWater(pos, FluidicWater.level(state) * Water.UNIT);
+                addWoken(pos, FluidicWater.level(state) * Water.UNIT, WaterSection.OPEN);
             }
-            else if(Terrain.storesWater(state) && FluidloggedCompat.waterLevel(world, pos) > 0 && removing.add(pos.toLong())) {
+            else if(Terrain.storesWater(state) && FluidloggedCompat.waterLevel(world, pos) > 0 && startRemoving(pos.toLong())) {
                 // Water kept inside a block by Fluidlogged API flows on, the block stays
-                removals.add(pos.toLong());
                 setTerrain(pos, Terrain.classify(state));
-                addWater(pos, FluidloggedCompat.waterLevel(world, pos) * Water.UNIT);
+                addWoken(pos, FluidloggedCompat.waterLevel(world, pos) * Water.UNIT, Terrain.classify(state));
             }
             else {
                 setTerrain(pos, Terrain.classify(world, pos, state));
@@ -507,9 +517,17 @@ public final class WaterSimulation {
         world.playEvent(1501, pos, 0);
     }
 
-    private void removeWoken() {
-        for(int n = 0; n < removals.size(); n++) {
-            BlockPos pos = BlockPos.fromLong(removals.getLong(n));
+    /**
+     * Removes the woken blocks whose water the step put into the simulation, its payloads carry that water. Blocks
+     * whose water never arrived, its section went away first, stay settled water.
+     */
+    private void removeWoken(StepResult step) {
+        for(int n = 0; n < step.woken.size(); n++) {
+            long packed = step.woken.getLong(n);
+            if(!removing.containsKey(packed)) continue;
+            removing.remove(packed);
+            removals.rem(packed);
+            BlockPos pos = BlockPos.fromLong(packed);
             // Its water is still there as simulated water, the neighbours are not told: plants that need water beside them
             // would check before the simulated water reaches them
             if(!world.isBlockLoaded(pos)) continue;
@@ -517,13 +535,27 @@ public final class WaterSimulation {
             if(FluidicWater.isWater(state)) place(pos, Blocks.AIR.getDefaultState(), 2);
             else if(FluidloggedCompat.waterLevel(world, pos) > 0) FluidloggedCompat.setWater(world, pos, state, 0, 2);
         }
-        removals.clear();
-        removing.clear();
+        for(int n = removals.size() - 1; n >= 0; n--) {
+            long packed = removals.getLong(n);
+            if(step.seq - removing.get(packed) < WOKEN_TIMEOUT) continue;
+            removals.removeLong(n);
+            removing.remove(packed);
+            BlockPos pos = BlockPos.fromLong(packed);
+            if(world.isBlockLoaded(pos)) setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
+        }
+    }
+
+    /** Starts removing a woken block, false when it is already */
+    private boolean startRemoving(long pos) {
+        if(removing.containsKey(pos)) return false;
+        removing.put(pos, appliedSeq);
+        removals.add(pos);
+        return true;
     }
 
     /** Whether the block is water that already went into the simulation and is about to be removed */
     public boolean isRemoving(BlockPos pos) {
-        return removing.contains(pos.toLong());
+        return removing.containsKey(pos.toLong());
     }
 
     /** Places a block for the simulation, water placed here is not reported back to it */
@@ -732,7 +764,8 @@ public final class WaterSimulation {
             }
         }
 
-        boolean flushNet = step % Math.max(1, config.networkInterval) == 0;
+        boolean flushNet = step % Math.max(1, config.networkInterval) == 0 || wokenThisStep;
+        wokenThisStep = false;
         int cells = 0, waiting = 0, flowing = 0;
         int refreshBudget = REFRESHES_PER_STEP;
         // Match the rate settled water dries at, a block gets a random tick about every 1365 ticks.
@@ -1122,6 +1155,24 @@ public final class WaterSimulation {
     }
 
     // ---------------------------------------------------------------- commands
+
+    private void doAddWoken(int x, int y, int z, int amount, long packed, byte code) {
+        if(y < 0 || y > 255) return;
+        long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
+        WaterSection section = sections.get(key);
+        if(section == null) section = createPending(key);
+        if(section.state == WaterSection.STATE_PENDING) {
+            section.defer(() -> doAddWoken(x, y, z, amount, packed, code));
+            return;
+        }
+        // A snapshot taken while the block was still there has it as settled water
+        int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        if(section.state == WaterSection.STATE_READY && (section.terrain[i] >= WaterSection.SETTLED || section.terrain[i] == WaterSection.WAKING)) applyTerrain(section, i, code);
+        doAddWater(x, y, z, amount, true);
+        result.woken.add(packed);
+        // Sent this step whatever the network interval, the block goes when the server applies it
+        wokenThisStep = true;
+    }
 
     private void doAddWater(int x, int y, int z, int amount, boolean allowUp) {
         doAddWater(x, y, z, amount, allowUp, false);

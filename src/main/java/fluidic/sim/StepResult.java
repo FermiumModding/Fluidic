@@ -31,6 +31,8 @@ final class StepResult {
     final LongArrayList wetSponges = new LongArrayList();
     /** Block positions of settled water blocks to turn back into simulated water */
     final LongArrayList wakes = new LongArrayList();
+    /** Block positions of woken blocks whose water this step put into the simulation and sent, the server removes them */
+    final LongArrayList woken = new LongArrayList();
     /** Section keys the simulation needs a terrain snapshot for */
     final LongArrayList terrainRequests = new LongArrayList();
     /** Section keys of ready sections whose terrain snapshot should be retaken */

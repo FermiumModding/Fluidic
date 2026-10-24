@@ -1,5 +1,6 @@
 package fluidic.client;
 
+import fluidic.block.FluidicWater;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
@@ -18,7 +19,10 @@ final class ClientWorldListener implements IWorldEventListener {
 
     @Override
     public void notifyBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
-        if(oldState != newState) ClientWaterCache.blockChanged(pos);
+        if(oldState == newState) return;
+        boolean wasWater = FluidicWater.isWater(oldState);
+        if(wasWater != FluidicWater.isWater(newState)) ChunkRedraws.waterChanged(pos, wasWater);
+        ClientWaterCache.blockChanged(pos);
     }
 
     @Override

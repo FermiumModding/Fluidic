@@ -124,6 +124,8 @@ public final class WaterRenderer {
         still = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_still");
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
+        // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
+        ChunkRedraws.caughtUp(WaterRenderer::markUrgent);
         // Sections beside changed blocks go first and past the count, vanilla may draw the change in this same frame
         long urgentDeadline = System.nanoTime() + URGENT_NANOS;
         for(LongIterator it = URGENT.iterator(); it.hasNext() && System.nanoTime() < urgentDeadline; ) {
@@ -266,6 +268,9 @@ public final class WaterRenderer {
     /** Adds the visible faces of one water cell in section local coordinates, returns whether any were added */
     private static boolean buildCell(WorldClient world, int ox, int oy, int oz, int lx, int ly, int lz) {
         int x = ox + lx, y = oy + ly, z = oz + lz;
+        // A water block the chunk on screen still shows, or already shows, draws this water. Drawing both doubles it,
+        // darker, for a moment: waking water is sent before its block goes, settled water stays until the chunk has it.
+        if(ChunkRedraws.showsWaterBlock(x, y, z, FluidicWater.isWater(world.getBlockState(POS.setPos(x, y, z))))) return false;
         float surface = surface(world, x, y, z);
         int light = world.getCombinedLight(POS.setPos(x, y, z), 0);
         // Same biome tint vanilla water gets, the 1.12 water texture is already blue
