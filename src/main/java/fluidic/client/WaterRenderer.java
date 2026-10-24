@@ -15,6 +15,7 @@ import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.block.BlockLiquid;
+import net.minecraft.block.state.BlockFaceShape;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
@@ -65,7 +66,7 @@ public final class WaterRenderer {
     /** Surface height of a full block of water as vanilla renders it */
     private static final float FULL_HEIGHT = Water.RENDER_HEIGHT;
 
-    private static TextureAtlasSprite still, flow;
+    private static TextureAtlasSprite still, flow, overlay;
     private static int red, green, blue;
     /** The cell being built is a thin layer resting on a full block of water, see FluidicWater.isFilm */
     private static boolean film;
@@ -152,6 +153,7 @@ public final class WaterRenderer {
         still = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_still");
         // Sides run down like vanilla's water, which draws them with the flowing texture
         flow = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_flow");
+        overlay = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_overlay");
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
         // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
@@ -191,7 +193,8 @@ public final class WaterRenderer {
         GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
         GlStateManager.enableDepth();
         GlStateManager.depthMask(false);
-        GlStateManager.disableCull();
+        // Faces are one sided like vanilla's water, the ones seen from both sides are drawn twice
+        GlStateManager.enableCull();
         GlStateManager.shadeModel(GL11.GL_SMOOTH);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
 
@@ -396,24 +399,33 @@ public final class WaterRenderer {
             vertex(lx, ly + h01, lz + 1, u0, v1, sky, block);
             vertex(lx + 1, ly + h11, lz + 1, u1, v1, sky, block);
             vertex(lx + 1, ly + h10, lz, u1, v0, sky, block);
+            // Seen from below too, from inside the water, where vanilla's water draws it from below, see shownFromBelow
+            if(shownFromBelow(world, x, y + 1, z)) {
+                vertex(lx, ly + h00, lz, u0, v0, sky, block);
+                vertex(lx + 1, ly + h10, lz, u1, v0, sky, block);
+                vertex(lx + 1, ly + h11, lz + 1, u1, v1, sky, block);
+                vertex(lx, ly + h01, lz + 1, u0, v1, sky, block);
+            }
             added = true;
         }
 
         if(ClientWaterCache.height(x, y - 1, z) == 0 && !isOpaque(world, x, y - 1, z) && !isLiquid(world, x, y - 1, z)) {
             float u0 = still.getMinU(), u1 = still.getMaxU(), v0 = still.getMinV(), v1 = still.getMaxV();
             float by = ly + INSET;
-            vertex(lx, by, lz, u0, v0, sky, block);
-            vertex(lx + 1, by, lz, u1, v0, sky, block);
-            vertex(lx + 1, by, lz + 1, u1, v1, sky, block);
-            vertex(lx, by, lz + 1, u0, v1, sky, block);
+            // Lit by the block below, like vanilla's water bottoms
+            int below = world.light(x, y - 1, z), belowSky = (below >> 20 & 15) << 4, belowBlock = below & 65535;
+            vertex(lx, by, lz, u0, v0, belowSky, belowBlock, 0.5F);
+            vertex(lx + 1, by, lz, u1, v0, belowSky, belowBlock, 0.5F);
+            vertex(lx + 1, by, lz + 1, u1, v1, belowSky, belowBlock, 0.5F);
+            vertex(lx, by, lz + 1, u0, v1, belowSky, belowBlock, 0.5F);
             added = true;
         }
 
-        if(!isThin(world, x, y, z - 1)) added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, s00, s10, floor, column, sky, block);
-        if(!isThin(world, x, y, z + 1)) added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, s11, s01, floor, column, sky, block);
-        if(!isThin(world, x - 1, y, z)) added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, s01, s00, floor, column, sky, block);
-        if(!isThin(world, x + 1, y, z)) added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, s10, s11, floor, column, sky, block);
-        added |= thinBlocks(world, x, y, z, lx, ly, lz, sky, block);
+        if(!isThin(world, x, y, z - 1)) added |= side(world, x, y, z - 1, lx, ly, lz + INSET, lx + 1, lz + INSET, h00, h10, s00, s10, floor, column, EnumFacing.NORTH);
+        if(!isThin(world, x, y, z + 1)) added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - INSET, lx, lz + 1 - INSET, h11, h01, s11, s01, floor, column, EnumFacing.SOUTH);
+        if(!isThin(world, x - 1, y, z)) added |= side(world, x - 1, y, z, lx + INSET, ly, lz + 1, lx + INSET, lz, h01, h00, s01, s00, floor, column, EnumFacing.WEST);
+        if(!isThin(world, x + 1, y, z)) added |= side(world, x + 1, y, z, lx + 1 - INSET, ly, lz, lx + 1 - INSET, lz + 1, h10, h11, s10, s11, floor, column, EnumFacing.EAST);
+        added |= thinBlocks(world, x, y, z, lx, ly, lz);
         return added;
     }
 
@@ -426,7 +438,7 @@ public final class WaterRenderer {
      * Draws the simulated water reaching into thin blocks around a cell, like glass panes, the ones this cell draws for,
      * see ThinBlockWater.drawsFor. The water inside a corner of panes only touches its cell diagonally.
      */
-    private static boolean thinBlocks(SectionBlocks world, int x, int y, int z, int lx, int ly, int lz, int sky, int block) {
+    private static boolean thinBlocks(SectionBlocks world, int x, int y, int z, int lx, int ly, int lz) {
         boolean added = false;
         BlockPos water = new BlockPos(x, y, z);
         for(int dx = -1; dx <= 1; dx++) {
@@ -435,6 +447,9 @@ public final class WaterRenderer {
                 BlockPos pos = water.add(dx, 0, dz);
                 IBlockState state = world.getBlockState(pos);
                 if(!FluidicWater.isThin(world, state) || !ThinBlockWater.drawsFor(pos, water)) continue;
+                // Lit by the thin block's own light, like ThinBlockWater.drawBesideWater lights settled water in it
+                int light = world.light(x + dx, y, z + dz);
+                int sky = (light >> 20 & 15) << 4, block = light & 65535;
                 added |= ThinBlockWater.draw(world, pos, state, true, (vx, vy, vz, u, v, shade) -> BUFFER.pos(vx, vy, vz)
                         .color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex(),
                         still, lx + dx, ly, lz + dz);
@@ -451,7 +466,7 @@ public final class WaterRenderer {
      * running over the edge, instead of leaving the bank between the two showing.
      */
     private static boolean side(SectionBlocks world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top0, float top1,
-                                float edge0, float edge1, float floor, boolean column, int sky, int block) {
+                                float edge0, float edge1, float floor, boolean column, EnumFacing toward) {
         if(isOpaque(world, nx, y, nz)) return false;
         float neighbor = surface(world, nx, y, nz);
         if(neighbor >= 0.0F && (!column || neighbor >= 1.0F)) return false;
@@ -471,16 +486,53 @@ public final class WaterRenderer {
             bottom0 = bottom1 = bottom;
         }
         if(top0 <= bottom0 && top1 <= bottom1) return false;
-        float u0 = flow.getMinU(), u1 = flow.getInterpolatedU(8.0D);
-        vertex(x0, ly + bottom0, z0, u0, flow.getInterpolatedV(Math.min(16.0F, (1.0F - bottom0) * 8.0F)), sky, block);
-        vertex(x0, ly + Math.max(top0, bottom0), z0, u0, flow.getInterpolatedV(Math.min(16.0F, (1.0F - top0) * 8.0F)), sky, block);
-        vertex(x1, ly + Math.max(top1, bottom1), z1, u1, flow.getInterpolatedV(Math.min(16.0F, (1.0F - top1) * 8.0F)), sky, block);
-        vertex(x1, ly + bottom1, z1, u1, flow.getInterpolatedV(Math.min(16.0F, (1.0F - bottom1) * 8.0F)), sky, block);
+        // Against a solid face like glass the plain overlay texture, like vanilla's water sides
+        POS.setPos(nx, y, nz);
+        TextureAtlasSprite sprite = world.getBlockState(POS).getBlockFaceShape(world, POS, toward.getOpposite()) == BlockFaceShape.SOLID ? overlay : flow;
+        float u0 = sprite.getMinU(), u1 = sprite.getInterpolatedU(8.0D);
+        // Lit by the block it faces, like vanilla's water sides, not by the depth of the water behind it
+        int light = world.light(nx, y, nz);
+        int sky = (light >> 20 & 15) << 4, block = light & 65535;
+        // Shaded by direction like vanilla's water sides
+        float shade = toward.getAxis() == EnumFacing.Axis.Z ? 0.8F : 0.6F;
+        vertex(x0, ly + bottom0, z0, u0, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - bottom0) * 8.0F)), sky, block, shade);
+        vertex(x0, ly + Math.max(top0, bottom0), z0, u0, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - top0) * 8.0F)), sky, block, shade);
+        vertex(x1, ly + Math.max(top1, bottom1), z1, u1, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - top1) * 8.0F)), sky, block, shade);
+        vertex(x1, ly + bottom1, z1, u1, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - bottom1) * 8.0F)), sky, block, shade);
+        // Flowing sides are seen from inside the water too. Against a solid face only from outside like vanilla's, from
+        // inside it would show as a second layer of water behind glass.
+        if(sprite != overlay) {
+            vertex(x0, ly + bottom0, z0, u0, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - bottom0) * 8.0F)), sky, block, shade);
+            vertex(x1, ly + bottom1, z1, u1, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - bottom1) * 8.0F)), sky, block, shade);
+            vertex(x1, ly + Math.max(top1, bottom1), z1, u1, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - top1) * 8.0F)), sky, block, shade);
+            vertex(x0, ly + Math.max(top0, bottom0), z0, u0, sprite.getInterpolatedV(Math.min(16.0F, (1.0F - top0) * 8.0F)), sky, block, shade);
+        }
         return true;
+    }
+
+    /**
+     * Whether a water surface below a position is drawn from below too, like BlockLiquid.shouldRenderSides: when open to
+     * a block around above it that is neither water nor a full block.
+     */
+    private static boolean shownFromBelow(SectionBlocks world, int x, int y, int z) {
+        if(y > 255) return true;
+        for(int dx = -1; dx <= 1; dx++) {
+            for(int dz = -1; dz <= 1; dz++) {
+                POS.setPos(x + dx, y, z + dz);
+                IBlockState state = world.getBlockState(POS);
+                if(!state.getMaterial().isLiquid() && !state.isFullBlock()) return true;
+            }
+        }
+        return false;
     }
 
     private static void vertex(float x, float y, float z, float u, float v, int sky, int block) {
         BUFFER.pos(x, y, z).color(red, green, blue, 255).tex(u, v).lightmap(sky, block).endVertex();
+    }
+
+    /** A vertex shaded by the direction of its face, like vanilla shades block faces */
+    private static void vertex(float x, float y, float z, float u, float v, int sky, int block, float shade) {
+        BUFFER.pos(x, y, z).color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex();
     }
 
     /**
