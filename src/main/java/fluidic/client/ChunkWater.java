@@ -14,6 +14,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 import net.minecraftforge.fml.common.Loader;
 
+import javax.annotation.Nullable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -118,6 +119,34 @@ public final class ChunkWater {
         if(redraw[2] == 0) return false;
         redraw[2] = 0;
         return layer == BlockRenderLayer.TRANSLUCENT && WATER_TURN.get() == state;
+    }
+
+    /** Per drawing thread: the vertices of water just drawn in another block's turn, start and end, and as which water block */
+    private static final ThreadLocal<int[]> DRAWN_WATER = ThreadLocal.withInitial(() -> new int[2]);
+    private static final ThreadLocal<IBlockState> DRAWN_WATER_STATE = new ThreadLocal<>();
+
+    /**
+     * Water was drawn in the turn of another block, like a pane or grass, as these vertices of the buffer. Renderers that
+     * tag vertices with the block of the turn for shader packs tag them as water instead, see fluidic.mixin.celeritas.
+     */
+    public static void drewWater(int start, int end, IBlockState water) {
+        if(end <= start) return;
+        int[] drawn = DRAWN_WATER.get();
+        drawn[0] = start;
+        drawn[1] = end;
+        DRAWN_WATER_STATE.set(water);
+    }
+
+    /** The water drawn in the turn just finished, as its vertex range, or null, and forgets it */
+    @Nullable
+    public static IBlockState takeDrawnWater(int[] range) {
+        IBlockState water = DRAWN_WATER_STATE.get();
+        if(water == null) return null;
+        DRAWN_WATER_STATE.set(null);
+        int[] drawn = DRAWN_WATER.get();
+        range[0] = drawn[0];
+        range[1] = drawn[1];
+        return water;
     }
 
     /** The water block the simulated water inside a block is drawn as, null when there is none */

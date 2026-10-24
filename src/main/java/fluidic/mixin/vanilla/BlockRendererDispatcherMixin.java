@@ -3,6 +3,7 @@ package fluidic.mixin.vanilla;
 import fluidic.block.FluidicWater;
 import fluidic.client.ChunkWater;
 import fluidic.client.ThinBlockWater;
+import fluidic.sim.Water;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.BlockFluidRenderer;
 import net.minecraft.client.renderer.BlockRendererDispatcher;
@@ -34,7 +35,9 @@ public abstract class BlockRendererDispatcherMixin {
     private void fluidic_waterInside(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer, CallbackInfoReturnable<Boolean> cir) {
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
         if(layer == BlockRenderLayer.TRANSLUCENT && FluidicWater.isThin(world, state)) {
+            int start = buffer.getVertexCount();
             boolean drawn = ThinBlockWater.drawBesideWater(world, pos, state, buffer);
+            if(drawn) ChunkWater.drewWater(start, buffer.getVertexCount(), FluidicWater.state(Water.LEVELS));
             // Blocks drawn in another layer only got this turn for the water, translucent ones draw themselves after it
             if(state.getBlock().getRenderLayer() != BlockRenderLayer.TRANSLUCENT) cir.setReturnValue(drawn);
             return;
@@ -47,8 +50,10 @@ public abstract class BlockRendererDispatcherMixin {
         }
         // Shader packs tell water by the block its vertices are tagged with, OptiFine tagged them with the block here
         boolean tagged = ChunkWater.tagAs(water, pos, world, buffer);
+        int start = buffer.getVertexCount();
         try {
             cir.setReturnValue(fluidRenderer.renderFluid(world, water, pos, buffer));
+            ChunkWater.drewWater(start, buffer.getVertexCount(), water);
         }
         finally {
             if(tagged) ChunkWater.untag(buffer);
