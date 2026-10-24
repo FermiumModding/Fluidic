@@ -1,3 +1,8 @@
+Disclaimer: This mod was created as a stress test of Claude Code (Opus 5.5) to determine its current state
+in regards to Minecraft modding, its performance, and potential utility. As such 99% of this project is 
+generated code. While extensive testing and iteration has been done, there will undoubtedly be bugs, primarily
+due to the invasiveness of this project's features. Please report issues to the issue tracker.
+
 # Fluidic
 
 Finite water simulation for Minecraft 1.12.2 (Forge 14.23.5.2860). Rain collects into
