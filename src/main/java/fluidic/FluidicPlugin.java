@@ -21,7 +21,7 @@ public class FluidicPlugin implements IFMLLoadingPlugin {
 		// @MixinConfig.MixinToggle in ForgeConfigHandler. False for Vanilla/Coremod mixins.
 		FermiumRegistryAPI.enqueueMixin(false, "mixins.fluidic.vanilla.json");
 		// Celeritas and its forks like Voxtavium draw chunks themselves, simulated water hooks into that too
-		FermiumRegistryAPI.enqueueMixin(true, "mixins.fluidic.celeritas.json", () -> Loader.isModLoaded("celeritas"));
+		FermiumRegistryAPI.enqueueMixin(true, "mixins.fluidic.celeritas.json", () -> FermiumRegistryAPI.isModPresent("celeritas"));
 	}
 
 	@Override
