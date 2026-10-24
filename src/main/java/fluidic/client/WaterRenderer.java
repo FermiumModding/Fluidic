@@ -272,7 +272,7 @@ public final class WaterRenderer {
         int x = ox + lx, y = oy + ly, z = oz + lz;
         // A water block the chunk on screen still shows, or already shows, draws this water. Drawing both doubles it,
         // darker, for a moment: waking water is sent before its block goes, settled water stays until the chunk has it.
-        if(ChunkRedraws.showsWaterBlock(x, y, z, FluidicWater.isWater(world.getBlockState(POS.setPos(x, y, z))))) return false;
+        if(FluidicWater.isWater(shown(world, x, y, z))) return false;
         float surface = surface(world, x, y, z);
         int light = world.getCombinedLight(POS.setPos(x, y, z), 0);
         // Same biome tint vanilla water gets, the 1.12 water texture is already blue
@@ -432,7 +432,7 @@ public final class WaterRenderer {
     /** Rendered level of a water block, -1 if there is none */
     private static float liquidHeight(WorldClient world, int x, int y, int z) {
         if(y < 0 || y > 255) return -1.0F;
-        IBlockState state = world.getBlockState(POS.setPos(x, y, z));
+        IBlockState state = shown(world, x, y, z);
         if(!state.getMaterial().isLiquid()) return -1.0F;
         // Like FluidicWater.renderHeight: water continuing up into a block or simulated water makes it a column
         if(raised(world, x, y + 1, z)) return 1.0F;
@@ -444,7 +444,7 @@ public final class WaterRenderer {
     /** Surface of a water block ignoring any water above it, 1 for anything else so nothing reaches into it */
     private static float liquidLevel(WorldClient world, int x, int y, int z) {
         if(y < 0 || y > 255) return 1.0F;
-        IBlockState state = world.getBlockState(POS.setPos(x, y, z));
+        IBlockState state = shown(world, x, y, z);
         if(!state.getMaterial().isLiquid()) return 1.0F;
         if(FluidicWater.isWater(state)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
@@ -539,6 +539,14 @@ public final class WaterRenderer {
     }
 
     private static boolean isLiquid(WorldClient world, int x, int y, int z) {
-        return y >= 0 && y <= 255 && world.getBlockState(POS.setPos(x, y, z)).getMaterial().isLiquid();
+        return y >= 0 && y <= 255 && shown(world, x, y, z).getMaterial().isLiquid();
+    }
+
+    /**
+     * The block at a position as the chunk on screen shows it. Water blocks that came, went or changed level show as they
+     * were until their chunk is redrawn, simulated water meets them as they are drawn, without gaps between the two.
+     */
+    private static IBlockState shown(WorldClient world, int x, int y, int z) {
+        return ChunkRedraws.shownState(x, y, z, world.getBlockState(POS.setPos(x, y, z)));
     }
 }

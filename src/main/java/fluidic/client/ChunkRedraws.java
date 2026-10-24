@@ -1,11 +1,13 @@
 package fluidic.client;
 
+import fluidic.block.FluidicWater;
 import fluidic.sim.Water;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,8 @@ public final class ChunkRedraws {
      */
     private static final Long2LongOpenHashMap WATER_CHANGES = new Long2LongOpenHashMap();
     /** The cells of WATER_CHANGES by section */
+    /** The block each cell of WATER_CHANGES had before, which the chunk on screen still shows */
+    private static final Long2ObjectOpenHashMap<IBlockState> OLD_STATES = new Long2ObjectOpenHashMap<>();
     private static final Long2ObjectOpenHashMap<LongArrayList> WATER_CHANGE_CELLS = new Long2ObjectOpenHashMap<>();
     /** When a section first waited for a redraw of its water block changes, nanoTime */
     private static final Long2LongOpenHashMap WATER_CHANGE_SINCE = new Long2LongOpenHashMap();
@@ -50,10 +54,11 @@ public final class ChunkRedraws {
     }
 
     /**
-     * A water block came or went. Until its section is redrawn, the chunk on screen still shows it as it was, the
-     * simulated water there is drawn to match, see {@link #showsWaterBlock}.
+     * A water block came, went or changed level. Until its section is redrawn, the chunk on screen still shows it as it
+     * was, simulated water there and beside it is drawn to match, see {@link #shownState}.
      */
-    static void waterChanged(BlockPos pos, boolean wasWater) {
+    static void waterChanged(BlockPos pos, IBlockState oldState) {
+        boolean wasWater = FluidicWater.isWater(oldState);
         long key = Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
         long seq = next();
         CHANGED.put(key, seq);
@@ -62,19 +67,23 @@ public final class ChunkRedraws {
         // Changed back and forth before a redraw, the screen still shows how it was before the first change
         boolean before = old >= 0L ? (old & 1L) != 0 : wasWater;
         if(old < 0L) {
+            OLD_STATES.put(packed, oldState);
             WATER_CHANGE_CELLS.computeIfAbsent(key, k -> new LongArrayList()).add(packed);
             if(!WATER_CHANGE_SINCE.containsKey(key)) WATER_CHANGE_SINCE.put(key, System.nanoTime());
         }
         WATER_CHANGES.put(packed, seq << 1 | (before ? 1L : 0L));
     }
 
-    /** Whether the chunk on screen shows a water block at a position, which has one now or not */
-    static boolean showsWaterBlock(int x, int y, int z, boolean isWater) {
-        if(WATER_CHANGES.isEmpty()) return isWater;
-        long change = WATER_CHANGES.get(((long)x & 0x3FFFFFFL) << 38 | ((long)y & 0xFFFL) << 26 | ((long)z & 0x3FFFFFFL));
-        if(change < 0L) return isWater;
+    /** The block the chunk on screen shows at a position, the given one it has now or a water block as it was before */
+    static IBlockState shownState(int x, int y, int z, IBlockState now) {
+        if(WATER_CHANGES.isEmpty()) return now;
+        long packed = ((long)x & 0x3FFFFFFL) << 38 | ((long)y & 0xFFFL) << 26 | ((long)z & 0x3FFFFFFL);
+        long change = WATER_CHANGES.get(packed);
+        if(change < 0L) return now;
         Long drawn = DRAWN.get(Water.sectionKey(x >> 4, y >> 4, z >> 4));
-        return drawn != null && drawn >= change >> 1 ? isWater : (change & 1L) != 0;
+        if(drawn != null && drawn >= change >> 1) return now;
+        IBlockState old = OLD_STATES.get(packed);
+        return old != null ? old : now;
     }
 
     /**
@@ -92,7 +101,10 @@ public final class ChunkRedraws {
             for(int n = 0; n < cells.size() && all; n++) all = drawn >= WATER_CHANGES.get(cells.getLong(n)) >> 1;
             if(!all && now - WATER_CHANGE_SINCE.get(entry.getLongKey()) < WATER_CHANGE_TIMEOUT) continue;
             WATER_CHANGE_SINCE.remove(entry.getLongKey());
-            for(int n = 0; n < cells.size(); n++) WATER_CHANGES.remove(cells.getLong(n));
+            for(int n = 0; n < cells.size(); n++) {
+                WATER_CHANGES.remove(cells.getLong(n));
+                OLD_STATES.remove(cells.getLong(n));
+            }
             long key = entry.getLongKey();
             it.remove();
             sections.accept(key);
@@ -121,7 +133,12 @@ public final class ChunkRedraws {
             CHANGED.remove(key);
             DRAWN.remove(key);
             LongArrayList cells = WATER_CHANGE_CELLS.remove(key);
-            if(cells != null) for(int n = 0; n < cells.size(); n++) WATER_CHANGES.remove(cells.getLong(n));
+            if(cells != null) {
+                for(int n = 0; n < cells.size(); n++) {
+                    WATER_CHANGES.remove(cells.getLong(n));
+                    OLD_STATES.remove(cells.getLong(n));
+                }
+            }
             WATER_CHANGE_SINCE.remove(key);
         }
     }
@@ -130,6 +147,7 @@ public final class ChunkRedraws {
         CHANGED.clear();
         DRAWN.clear();
         WATER_CHANGES.clear();
+        OLD_STATES.clear();
         WATER_CHANGE_CELLS.clear();
         WATER_CHANGE_SINCE.clear();
     }

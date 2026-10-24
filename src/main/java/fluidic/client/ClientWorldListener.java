@@ -21,7 +21,8 @@ final class ClientWorldListener implements IWorldEventListener {
     public void notifyBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
         if(oldState == newState) return;
         boolean wasWater = FluidicWater.isWater(oldState);
-        if(wasWater != FluidicWater.isWater(newState)) ChunkRedraws.waterChanged(pos, wasWater);
+        // Came, went or changed level, the chunk shows it as it was until it is redrawn
+        if(wasWater || FluidicWater.isWater(newState)) ChunkRedraws.waterChanged(pos, oldState);
         ClientWaterCache.blockChanged(pos);
     }
 
