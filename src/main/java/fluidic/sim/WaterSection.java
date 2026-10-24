@@ -114,6 +114,16 @@ final class WaterSection {
     /** Sea level of the world, for the step being computed */
     private int seaLevel;
     int quietSteps;
+    /**
+     * Since the section went quiet: water moved up less water moved down, and water that came in across its sides less
+     * water that went out. Pressure trades in deep water go back and forth and cancel out. Water still finding its level
+     * through pressure too slight to count as flowing, like rising up the far side of a U bend, adds up.
+     */
+    private long lifted, exchanged;
+    /** Quiet periods settling was put off for in a row because the water was still finding its level */
+    int driftWindows;
+    /** The surfaces joined through its full water were level when last looked at, see WaterSimulation.equalizePressure */
+    boolean levelled;
     /** Times settling waited for neighbouring sections a pool surface reaches */
     int levelWaits;
     int idleSteps;
@@ -664,8 +674,28 @@ final class WaterSection {
             noteFlow(noted);
             t.addMass(ti, f);
             t.noteFlow(noted);
+            if(dir == Water.UP || dir == Water.DOWN) {
+                int lift = dir == Water.UP ? f : -f;
+                lifted += lift;
+                if(t != this) t.lifted += lift;
+            }
+            else if(t != this) {
+                exchanged -= f;
+                t.exchanged += f;
+            }
         }
         flowCount = 0;
+    }
+
+    /** Starts measuring how the water moves while the section is quiet, see lifted */
+    void startQuiet() {
+        lifted = 0;
+        exchanged = 0;
+    }
+
+    /** Whether the water moved on the whole while the section was quiet, see lifted */
+    boolean drifted() {
+        return Math.abs(lifted) > Water.SETTLE_DRIFT || Math.abs(exchanged) > Water.SETTLE_DRIFT;
     }
 
     private void noteFlow(int f) {

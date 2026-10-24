@@ -106,8 +106,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 
 ## Known limitations
 
-* Pressure comes from slight compression of deep water, so U-bends equalize slowly (minutes over long
-  distances).
+* Pressure comes from slight compression of deep water, which only pushes a little each step. While water
+  moves slowly, the surfaces joined through each body of full water are also levelled directly a little at a
+  time (communicating vessels), so U-bends rise steadily and end level. Bodies larger than 16384 cells are not
+  levelled this way and still equalize slowly.
 * Mixins are loaded through FermiumBooter in two configs. `mixins.fluidic.vanilla.json` is always loaded by
   the coremod (`FluidicPlugin`): rendering, buckets, lily pads, sponges, fluid handlers and world generation.
   `mixins.fluidic.entity.json` is switched by `Enable Flowing Water Entity Physics`: entities swimming in,

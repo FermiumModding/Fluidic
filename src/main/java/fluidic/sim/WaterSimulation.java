@@ -794,13 +794,31 @@ public final class WaterSimulation {
                     linkNeighbors(section);
                     if(section.evaporate(random, evaporation, absorption, seaLevel, true)) section.dirtyNet = true;
                 }
+                // Water running somewhere may leave surfaces joined through full water at different heights again, and
+                // water still pouring in joins up with more of the body later
+                if(section.maxFlow > PRESSURE_RESET_FLOW || step % PRESSURE_RECHECK_STEPS == 0) section.levelled = false;
+                // Levelled a little at a time while the water only moves slowly, see equalizePressure
+                if(!section.levelled && !section.pending && section.maxFlow <= PRESSURE_FLOW_MAX && step % PRESSURE_STEPS == 0) equalizePressure(section);
                 if(section.pending || section.touched || section.maxFlow > Water.QUIET_FLOW) {
                     section.quietSteps = 0;
+                    section.driftWindows = 0;
                     if(section.pending) waiting++;
                     else if(section.maxFlow > Water.QUIET_FLOW) flowing++;
                 }
-                else if(++section.quietSteps >= config.settleSteps) {
-                    settle(section);
+                else {
+                    if(section.quietSteps == 0) section.startQuiet();
+                    if(++section.quietSteps >= config.settleSteps) {
+                        // Still finding its level through pressure too slight to count as flowing, like water rising up
+                        // the far side of a U bend. Settled now it would stop well short, the surfaces joined through full
+                        // water are levelled first and it comes to rest again.
+                        boolean drifting = section.driftWindows < Water.MAX_DRIFT_WINDOWS && (equalizePressure(section) | section.drifted());
+                        if(drifting) {
+                            section.quietSteps = 0;
+                            section.driftWindows++;
+                            flowing++;
+                        }
+                        else settle(section);
+                    }
                 }
             }
             else {
@@ -1057,6 +1075,157 @@ public final class WaterSimulation {
             }
         }
         return true;
+    }
+
+    /** Water that counts as full, a cell of a body of water pressure passes through, see equalizePressure */
+    private static final int BODY_FULL = Water.FULL - Water.SPREAD_DIFF;
+    /** Most surface to surface moves one equalizing makes per body of water */
+    private static final int MAX_PRESSURE_MOVES = 256;
+    /** Steps between levellings of water that is only moving slowly */
+    private static final int PRESSURE_STEPS = 2;
+    /** Water one levelling moves per body, so a surface rises and falls steadily, over a block a second */
+    private static final int PRESSURE_RATE = Water.UNIT;
+    /** Water moving faster than this somewhere in a section evens itself out, it is not levelled */
+    private static final int PRESSURE_FLOW_MAX = Water.UNIT;
+    /**
+     * Water moving faster than this may have put a levelled section out of level. Slower trades go on in still water
+     * all the time, a lake would be searched every few steps.
+     */
+    private static final int PRESSURE_RESET_FLOW = Water.UNIT / 4;
+    /** Steps between looking again at sections found level */
+    private static final int PRESSURE_RECHECK_STEPS = 20;
+
+    /**
+     * Communicating vessels. Pressure in the cell model passes from cell to cell a little each step, water rising up
+     * the far side of a U bend takes a thousand steps a block. So while the water only moves slowly, the surfaces resting
+     * on each body of full water are levelled directly: a little water at a time goes from the highest surface to the
+     * lowest until they are level. Only through full water, a waterfall or a film joining two pools passes no pressure.
+     * Returns whether water moved, the water then has to come to rest again.
+     */
+    private boolean equalizePressure(WaterSection start) {
+        visited.clear();
+        boolean moved = false, found = false;
+        for(int i = 0; i < 4096; i++) {
+            if(start.mass[i] < BODY_FULL || !WaterSection.holds(start.terrain[i]) || visited.contains(WaterSection.packCell(start.key, i))) continue;
+            found = true;
+            moved |= equalizeBody(start, i);
+        }
+        // Not until it has full water to look at, water still pouring in joins up later. A body that moved keeps it
+        // looking, a level one beside it marked it levelled.
+        if(found) start.levelled = !moved;
+        return moved;
+    }
+
+    private boolean equalizeBody(WaterSection start, int startIndex) {
+        poolCells.clear();
+        long first = WaterSection.packCell(start.key, startIndex);
+        visited.add(first);
+        poolCells.add(first);
+        // Surface cells resting on the body: packed cell, and its world y
+        LongArrayList surfaces = new LongArrayList();
+        IntArrayList surfaceY = new IntArrayList();
+        for(int n = 0; n < poolCells.size(); n++) {
+            if(poolCells.size() >= MAX_POOL) return false;
+            long cell = poolCells.getLong(n);
+            WaterSection section = sections.get(cell >>> 12);
+            int i = (int)(cell & 0xFFF);
+            for(int dir = Water.DOWN; dir <= Water.EAST; dir++) {
+                if(dir >= Water.NORTH && WaterSection.blocksSide(section.terrain[i], dir)) continue;
+                WaterSection ns = WaterSection.crosses(i, dir) ? sections.get(section.neighborKey(dir)) : section;
+                if(ns == null || ns.state != WaterSection.STATE_READY) continue;
+                int ni = WaterSection.neighborIndex(i, dir);
+                int code = ns.terrain[ni];
+                if(!WaterSection.holds(code) || dir >= Water.NORTH && WaterSection.blocksSide(code, dir ^ 1)) continue;
+                long packed = WaterSection.packCell(ns.key, ni);
+                if(visited.contains(packed)) continue;
+                if(ns.mass[ni] >= BODY_FULL) {
+                    visited.add(packed);
+                    poolCells.add(packed);
+                }
+                else {
+                    // Water resting on the body or room for it to rise into, or a partly filled cell beside it, like a pipe
+                    // under a ceiling still filling up
+                    visited.add(packed);
+                    surfaces.add(packed);
+                    surfaceY.add(ns.sy * 16 + (ni >> 8));
+                }
+            }
+        }
+        if(surfaces.size() < 2) {
+            markLevelled();
+            return false;
+        }
+
+        boolean moved = false;
+        int budget = PRESSURE_RATE;
+        for(int move = 0; move < MAX_PRESSURE_MOVES && budget > 0; move++) {
+            int high = -1, low = -1;
+            long highLevel = Long.MIN_VALUE, lowLevel = Long.MAX_VALUE;
+            for(int n = 0; n < surfaces.size(); n++) {
+                long cell = surfaces.getLong(n);
+                if(cell < 0) continue;
+                int mass = sections.get(cell >>> 12).mass[(int)(cell & 0xFFF)];
+                long level = (long)surfaceY.getInt(n) * Water.FULL + Math.min(mass, Water.FULL);
+                if(mass > 0 && level > highLevel) {
+                    highLevel = level;
+                    high = n;
+                }
+                if(level < lowLevel) {
+                    lowLevel = level;
+                    low = n;
+                }
+            }
+            // Within an eighth of a block the cell model evens it out itself
+            if(high < 0 || low < 0 || high == low || highLevel - lowLevel <= Water.UNIT) break;
+            long from = surfaces.getLong(high), to = surfaces.getLong(low);
+            WaterSection fs = sections.get(from >>> 12), ts = sections.get(to >>> 12);
+            int fi = (int)(from & 0xFFF), ti = (int)(to & 0xFFF);
+            int amount = (int)Math.min(Math.min((highLevel - lowLevel) / 2, budget), Math.min(fs.mass[fi], Water.FULL - ts.mass[ti]));
+            if(amount > 0) {
+                budget -= amount;
+                fs.removeMass(fi, amount);
+                ts.addMass(ti, amount);
+                for(WaterSection s : new WaterSection[] {fs, ts}) {
+                    s.dirtyNet = true;
+                    s.wakeUp();
+                    s.quietSteps = 0;
+                }
+                moved = true;
+            }
+            // The highest surface emptied, it sinks to the top of the full cell below it
+            if(fs.mass[fi] == 0) {
+                surfaces.set(high, -1L);
+                WaterSection ds = WaterSection.crosses(fi, Water.DOWN) ? sections.get(fs.neighborKey(Water.DOWN)) : fs;
+                int di = WaterSection.neighborIndex(fi, Water.DOWN);
+                if(ds != null && ds.state == WaterSection.STATE_READY && ds.mass[di] > 0) {
+                    surfaces.add(WaterSection.packCell(ds.key, di));
+                    surfaceY.add(ds.sy * 16 + (di >> 8));
+                }
+            }
+            // The lowest surface filled, it rises into the cell above it if there is room
+            if(ts.mass[ti] >= BODY_FULL) {
+                surfaces.set(low, -1L);
+                WaterSection us = WaterSection.crosses(ti, Water.UP) ? sections.get(ts.neighborKey(Water.UP)) : ts;
+                int ui = WaterSection.neighborIndex(ti, Water.UP);
+                if(us != null && us.state == WaterSection.STATE_READY && WaterSection.holds(us.terrain[ui]) && us.mass[ui] < BODY_FULL) {
+                    surfaces.add(WaterSection.packCell(us.key, ui));
+                    surfaceY.add(us.sy * 16 + (ui >> 8));
+                }
+            }
+        }
+        if(!moved) markLevelled();
+        return moved;
+    }
+
+    /** The body of water just looked at is level, none of its sections has to look again for a while */
+    private void markLevelled() {
+        long last = -1L;
+        for(int n = 0; n < poolCells.size(); n++) {
+            long key = poolCells.getLong(n) >>> 12;
+            if(key == last) continue;
+            last = key;
+            sections.get(key).levelled = true;
+        }
     }
 
     /** Whether a section has not been still for half the steps water needs to settle */

@@ -30,6 +30,13 @@ public final class Water {
      * underneath forever, which settling decompresses away anyway.
      */
     public static final int QUIET_PRESSURE_FLOW = UNIT / 8;
+    /**
+     * Water a quiet section may move up, down or across its sides on the whole before it settles, so water rising
+     * slowly through pressure, like up a U bend, keeps going until it nearly levels.
+     */
+    public static final int SETTLE_DRIFT = UNIT / 2;
+    /** Quiet periods in a row settling is put off for while water keeps drifting, in case it never stops. */
+    public static final int MAX_DRIFT_WINDOWS = 30;
     /** Cells holding less than this when settling evaporate instead of becoming a block. */
     public static final int SETTLE_MIN = UNIT / 4;
 
