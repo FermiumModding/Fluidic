@@ -139,8 +139,43 @@ public final class FluidicWater {
     }
 
     /** Called by the fluid renderer mixin before drawing a water block */
-    public static void beginRendering(BlockPos pos) {
+    public static void beginRendering(IBlockAccess world, BlockPos pos) {
         RENDERING.set(pos);
+    }
+
+    /**
+     * A thin layer of water resting on a full block of water with nothing above it, like a bucket poured onto a pool
+     * leaves until it settles there. The pool under it reaches up to it, the pool around it rises to meet that, and
+     * the edge of the layer slopes down onto the pool, see surfaceCorner. Unlike a stream falling into a pool, which
+     * has water above it.
+     */
+    /** Water below a thin layer counts as full from this height, 7/8 of a block */
+    private static final int FILM_BASE = 255 * 7 / 8;
+    /** Thickest water that counts as a thin layer, 3/8 of a block. The partly drained top of a deeper pool is no layer. */
+    private static final int FILM_MAX = 255 * 3 / 8;
+
+    public static boolean isFilm(IBlockAccess world, BlockPos pos) {
+        if(pos.getY() <= 0 || pos.getY() >= 255) return false;
+        int here = waterHeight(world, pos);
+        // Moving water under it is full give or take a little, while it evens out
+        return here > 0 && here <= FILM_MAX && waterHeight(world, pos.down()) >= FILM_BASE && waterHeight(world, pos.up()) == 0;
+    }
+
+    /** Water in a block, 0-255, a water block or simulated water */
+    private static int waterHeight(IBlockAccess world, BlockPos pos) {
+        IBlockState state = world.getBlockState(pos);
+        if(isWater(state)) return level(state) * 255 / Water.LEVELS;
+        if(state.getMaterial().isLiquid()) return 255;
+        return simHeight(pos);
+    }
+
+    /**
+     * How much raised water under some water counts for raising a corner beside it: 0 for no water above, 2 for a thin
+     * layer resting on it, enough alone, 1 for a stream falling in, which takes two side by side, see surfaceCorner
+     */
+    public static int sheetWeight(IBlockAccess world, BlockPos above) {
+        if(!world.getBlockState(above).getMaterial().isLiquid() && simHeight(above) == 0) return 0;
+        return isFilm(world, above) ? 2 : 1;
     }
 
     /**
@@ -261,18 +296,28 @@ public final class FluidicWater {
             }
         }
         float sum = 0.0F;
-        int count = 0;
+        int count = 0, sheets = 0;
         boolean column = false;
+        // The edge of a thin layer on a pool slopes down onto the pool, the pool around it is as high as the layer's bottom.
+        // By the cells around the corner, not the block drawn, so all blocks sharing the corner agree on it.
+        boolean film = false;
+        for(int j = 0; j < 4 && !film; j++) film = isFilm(world, corner.add(-(j & 1), 0, -(j >> 1 & 1)));
         for(int j = 0; j < 4; j++) {
             BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
             if(doors && from != null && apartByDoor(world, from, cell.getX(), cell.getZ())) continue;
-            if(blocks && !world.getBlockState(cell).getMaterial().isLiquid() && simHeight(cell) > 0) continue;
+            if(blocks && !world.getBlockState(cell).getMaterial().isLiquid() && simHeight(cell) > 0) {
+                // Left out, but raised under a sheet of water it still raises the corner, see below
+                sheets += sheetWeight(world, cell.up());
+                continue;
+            }
             float height = renderHeight(world, cell);
             if(height >= 1.0F) {
                 column = true;
+                sheets += sheetWeight(world, cell.up());
                 continue;
             }
             if(height < 0.0F) continue;
+            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) > 0)) count += 10;
             if(height >= Water.RENDER_HEIGHT) {
                 sum += height * 10.0F;
                 count += 10;
@@ -280,6 +325,10 @@ public final class FluidicWater {
             sum += height;
             count++;
         }
+        // Water spreading over a pool in a sheet, like a bucket poured onto it, raises the blocks under it to full height.
+        // Where two of them meet the pool the surface rises to meet them instead of stepping up. A single one is a
+        // stream falling in, the pool around it stays flat.
+        if(sheets >= 2) return 1.0F;
         if(count == 0) return column ? 1.0F : 0.0F;
         return sum / count;
     }

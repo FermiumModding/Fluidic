@@ -62,6 +62,8 @@ public final class WaterRenderer {
 
     private static TextureAtlasSprite still;
     private static int red, green, blue;
+    /** The cell being built is a thin layer resting on a full block of water, see FluidicWater.isFilm */
+    private static boolean film;
 
     private WaterRenderer() {}
 
@@ -287,6 +289,7 @@ public final class WaterRenderer {
         // Corner heights, shared with neighbouring cells so the surface is continuous. Water continuing up, like a
         // falling stream, is full height on its own and draws its sides down to the water around it
         boolean column = surface >= 1.0F;
+        film = FluidicWater.isFilm(world, new BlockPos(x, y, z));
         // The corners as the water around shares them, a column's sides reach down to these
         BlockPos cell = new BlockPos(x, y, z);
         float s00 = corner(world, x, y, z, surface, cell);
@@ -393,7 +396,8 @@ public final class WaterRenderer {
         }
         else {
             float bottom = floor;
-            if(!isSolid(world, nx, y, nz)) {
+            // Not the edge of a thin layer on a pool, the pool beside it rises to meet it, see FluidicWater.isFilm
+            if(!isSolid(world, nx, y, nz) && !film) {
                 float below = surface(world, nx, y - 1, nz);
                 if(below >= 0.0F && below < 1.0F) bottom = Math.min(bottom, below - 1.0F);
             }
@@ -419,7 +423,7 @@ public final class WaterRenderer {
     private static float surface(WorldClient world, int x, int y, int z) {
         int height = ClientWaterCache.height(x, y, z);
         if(height == 0) return liquidHeight(world, x, y, z);
-        if(ClientWaterCache.height(x, y + 1, z) > 0 || isLiquid(world, x, y + 1, z)) return 1.0F;
+        if(raised(world, x, y + 1, z)) return 1.0F;
         // Full water reaches up to an opaque block above it instead of leaving a gap of air under it
         if(height >= 255 && isOpaque(world, x, y + 1, z)) return 1.0F;
         return height / 255.0F * FULL_HEIGHT;
@@ -431,7 +435,7 @@ public final class WaterRenderer {
         IBlockState state = world.getBlockState(POS.setPos(x, y, z));
         if(!state.getMaterial().isLiquid()) return -1.0F;
         // Like FluidicWater.renderHeight: water continuing up into a block or simulated water makes it a column
-        if(isLiquid(world, x, y + 1, z) || ClientWaterCache.height(x, y + 1, z) > 0) return 1.0F;
+        if(raised(world, x, y + 1, z)) return 1.0F;
         if(FluidicWater.isWater(state) && FluidicWater.level(state) == Water.LEVELS && isOpaque(world, x, y + 1, z)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return FULL_HEIGHT;
@@ -472,23 +476,35 @@ public final class WaterRenderer {
             }
         }
         float sum = 0.0F;
-        int count = 0, columns = 0;
+        int count = 0, columns = 0, sheets = 0;
+        // The edge of a thin layer on a pool slopes down onto the pool, see FluidicWater.surfaceCorner. By the cells around
+        // the corner, so the cells sharing it agree.
+        boolean film = false;
+        for(int dx = -1; dx <= 0 && !film; dx++) {
+            for(int dz = -1; dz <= 0 && !film; dz++) film = FluidicWater.isFilm(world, new BlockPos(x + dx, y, z + dz));
+        }
         for(int dx = -1; dx <= 0; dx++) {
             for(int dz = -1; dz <= 0; dz++) {
                 float s;
                 // Water across the closed side of a door has its own surface
                 if(doors && FluidicWater.apartByDoor(world, cell, x + dx, z + dz)) continue;
                 if(isLiquid(world, x + dx, y, z + dz)) s = liquidHeight(world, x + dx, y, z + dz);
-                else if(blocks && ClientWaterCache.height(x + dx, y, z + dz) > 0) continue;
+                else if(blocks && ClientWaterCache.height(x + dx, y, z + dz) > 0) {
+                    // Left out, but raised under a sheet of water it still raises the corner, see below
+                    sheets += sheetWeight(world, x + dx, y + 1, z + dz);
+                    continue;
+                }
                 else s = surface(world, x + dx, y, z + dz);
                 // Water continuing up, like a falling stream, does not drag the surface around it up
                 if(s >= 1.0F) {
                     columns++;
+                    sheets += sheetWeight(world, x + dx, y + 1, z + dz);
                     continue;
                 }
                 if(s < 0.0F) {
                     if(isSolid(world, x + dx, y, z + dz)) continue;
                     s = 0.0F;
+                    if(film && raised(world, x + dx, y - 1, z + dz)) count += 10;
                 }
                 if(s >= FULL_HEIGHT) {
                     sum += s * 10.0F;
@@ -498,8 +514,20 @@ public final class WaterRenderer {
                 count++;
             }
         }
+        // Unless two meet here, a sheet of water spreading over a pool, see FluidicWater.surfaceCorner
+        if(sheets >= 2) return 1.0F;
         if(count == 0) return columns > 0 ? 1.0F : fallback;
         return sum / count;
+    }
+
+    /** Whether water at a block makes the water below reach up to it */
+    private static boolean raised(WorldClient world, int x, int y, int z) {
+        return ClientWaterCache.height(x, y, z) > 0 || isLiquid(world, x, y, z);
+    }
+
+    /** See FluidicWater.sheetWeight */
+    private static int sheetWeight(WorldClient world, int x, int y, int z) {
+        return y > 255 || !raised(world, x, y, z) ? 0 : FluidicWater.sheetWeight(world, new BlockPos(x, y, z));
     }
 
     private static boolean isSolid(WorldClient world, int x, int y, int z) {

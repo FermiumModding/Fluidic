@@ -377,7 +377,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         if(!(extended instanceof IExtendedBlockState) || !FluidicWater.isFinite(world)) return extended;
         // Water kept inside a block like stairs, Fluidlogged API shapes it around the block itself
         if(!FluidicWater.isWater(world.getBlockState(pos))) return extended;
-        FluidicWater.beginRendering(pos);
+        FluidicWater.beginRendering(world, pos);
         // Forge's order: the corners at low x low z, low x high z, high x high z, high x low z
         BlockPos[] corners = {pos, pos.south(), pos.south().east(), pos.east()};
         IExtendedBlockState shaped = (IExtendedBlockState)extended;

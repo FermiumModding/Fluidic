@@ -23,7 +23,7 @@ public abstract class BlockFluidRendererMixin {
 
     @Inject(method = "renderFluid", at = @At("HEAD"))
     private void fluidic_beginWater(IBlockAccess world, IBlockState state, BlockPos pos, BufferBuilder buffer, CallbackInfoReturnable<Boolean> cir) {
-        FluidicWater.beginRendering(pos);
+        FluidicWater.beginRendering(world, pos);
     }
 
     @Inject(method = "getFluidHeight", at = @At("HEAD"), cancellable = true)

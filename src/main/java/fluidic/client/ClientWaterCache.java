@@ -121,7 +121,9 @@ public final class ClientWaterCache {
             // Cells on the edge are drawn against the sections beside them, diagonal ones too since corners are shared
             if(x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15) borders |= WaterRenderer.around(x, y, z);
             // Settled water culls its faces against simulated water, redraw it when water appears or vanishes
-            if(ForgeConfigHandler.client.renderWater && (a == 0) != (b == 0) && besideSettledWater(mc, pos, ox + x, oy + y, oz + z)) {
+            if(ForgeConfigHandler.client.renderWater && (a == 0) != (b == 0) && (besideSettledWater(mc, pos, ox + x, oy + y, oz + z)
+                    // Water above simulated water raises the corners of water blocks beside that, see FluidicWater.surfaceCorner
+                    || besideSettledWater(mc, pos, ox + x, oy + y - 1, oz + z))) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);
             }
             // The blocks below are lit through it, see ChunkLight. Drawn by the chunks, its redraw reaches them.
