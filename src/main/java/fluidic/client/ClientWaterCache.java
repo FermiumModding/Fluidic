@@ -140,7 +140,25 @@ public final class ClientWaterCache {
         Deferred pending = DEFERRED.get(key);
         if(shown != heights) DEFERRED.put(key, new Deferred(heights, pending != null ? pending.since : ticks));
         else if(pending != null) DEFERRED.remove(key);
-        show(key, shown);
+        show(key, steadyTraces(current, shown));
+    }
+
+    /**
+     * Drawn water thinning out stays drawn until it is half as thin as drawn water has to be, see FluidicWater.MIN_DRAWN.
+     * Water running down a ledge holds about that much, a little more or less with every update. Whether it is drawn
+     * decides whether the water under it is a column up to it or the ledge's face runs down the block instead, crossing
+     * back and forth by a point or two the stream would flicker between the two.
+     */
+    private static byte[] steadyTraces(byte[] current, byte[] shown) {
+        if(current == null || shown == null) return shown;
+        byte[] result = shown;
+        for(int i = 0; i < 4096; i++) {
+            int was = current[i] & 255, now = shown[i] & 255;
+            if(was < FluidicWater.MIN_DRAWN || now < FluidicWater.MIN_DRAWN / 2 || now >= FluidicWater.MIN_DRAWN) continue;
+            if(result == shown) result = shown.clone();
+            result[i] = (byte)FluidicWater.MIN_DRAWN;
+        }
+        return result;
     }
 
     /** The next server sends its own dimensions keeping vanilla water */
