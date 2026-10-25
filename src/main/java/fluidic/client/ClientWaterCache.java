@@ -47,6 +47,7 @@ public final class ClientWaterCache {
             clear();
             dimension = packetDimension;
         }
+        WaterMotion.arrived(key, heights == null);
         // Water that settled into blocks keeps being drawn until the chunk is redrawn with the new blocks. That runs on
         // worker threads and can take many ticks in busy weather, until then the cell would show a hole.
         byte[] shown = heights;
@@ -217,6 +218,8 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, client thread only */
     public static int height(int x, int y, int z) {
+        // A cell being built again as the water is shown, see WaterMotion
+        if(WaterMotion.previous) return WaterMotion.height(x, y, z);
         return SECTIONS.height(x, y, z);
     }
 
@@ -232,6 +235,7 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, safe from any thread */
     public static int heightAnyThread(int x, int y, int z) {
+        if(WaterMotion.previous && WaterMotion.onClientThread()) return WaterMotion.height(x, y, z);
         return SECTIONS.height(x, y, z);
     }
 

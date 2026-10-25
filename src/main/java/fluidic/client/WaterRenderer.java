@@ -73,6 +73,9 @@ public final class WaterRenderer {
     /** Per section rebuild: corner levels by local corner, 0-16 along x and z, and water colours by column */
     private static final float[] corners = new float[17 * 17 * 16];
     private static final int[] cornerGeneration = new int[17 * 17 * 16];
+    /** The same for the water as shown, see WaterMotion */
+    private static final float[] shownCorners = new float[17 * 17 * 16];
+    private static final int[] shownCornerGeneration = new int[17 * 17 * 16];
     private static final int[] colors = new int[16 * 16];
     private static final int[] colorGeneration = new int[16 * 16];
     /** Counts section rebuilds, entries from an earlier one are stale */
@@ -124,6 +127,7 @@ public final class WaterRenderer {
     static void redrawAll() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
+        WaterMotion.clear();
         URGENT.clear();
         DIRTY.clear();
         if(!ChunkWater.isActive()) for(long key : ClientWaterCache.keys()) DIRTY.add(key);
@@ -132,11 +136,13 @@ public final class WaterRenderer {
     /** The client dropped a section, nothing waits for it to be drawn again */
     static void unloadSection(long key) {
         FILM_WAITS.remove(key);
+        WaterMotion.unload(key);
     }
 
     static void clear() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
+        WaterMotion.clear();
         FILM_WAITS.clear();
         DIRTY.clear();
         URGENT.clear();
@@ -154,6 +160,7 @@ public final class WaterRenderer {
         // Sides run down like vanilla's water, which draws them with the flowing texture
         flow = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_flow");
         overlay = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_overlay");
+        WaterMotion.frame();
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
         // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
@@ -210,7 +217,7 @@ public final class WaterRenderer {
             if(!frustum.isBoxInFrustum(bx, by, bz, bx + 16, by + 16, bz + 16)) continue;
             GlStateManager.pushMatrix();
             GlStateManager.translate(ox, oy, oz);
-            GlStateManager.callList(entry.getIntValue());
+            if(!WaterMotion.draw(key, DefaultVertexFormats.BLOCK)) GlStateManager.callList(entry.getIntValue());
             GlStateManager.popMatrix();
         }
 
@@ -262,10 +269,12 @@ public final class WaterRenderer {
     private static int rebuildGroup(WorldClient world, long first, int limit, long deadline) {
         LongArrayList group = new LongArrayList();
         group.add(first);
+        // Moving on together, the corners they share stay together
+        long duration = WaterMotion.duration(first);
         int built = 0;
         for(; built < group.size() && built < limit && (built == 0 || System.nanoTime() < deadline); built++) {
             long key = group.getLong(built);
-            rebuild(world, key);
+            rebuild(world, key, duration);
             int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
             for(int dx = -1; dx <= 1; dx++) {
                 for(int dy = -1; dy <= 1; dy++) {
@@ -282,7 +291,7 @@ public final class WaterRenderer {
         return built;
     }
 
-    private static void rebuild(WorldClient world, long key) {
+    private static void rebuild(WorldClient world, long key, long duration) {
         byte[] heights = ClientWaterCache.section(key);
         boolean any = false;
         if(heights != null) {
@@ -292,11 +301,15 @@ public final class WaterRenderer {
             building = key;
             SectionBlocks blocks = BLOCKS.begin(world, ox, oy, oz);
             BUFFER.begin(GL11.GL_QUADS, DefaultVertexFormats.BLOCK);
+            boolean moving = WaterMotion.begin(key);
             RuntimeException failed = null;
             try {
                 for(int i = 0; i < 4096; i++) {
                     if(heights[i] == 0) continue;
-                    any |= buildCell(blocks, ox, oy, oz, i & 15, i >> 8, (i >> 4) & 15);
+                    int lx = i & 15, ly = i >> 8, lz = (i >> 4) & 15;
+                    int first = BUFFER.getVertexCount();
+                    any |= buildCell(blocks, ox, oy, oz, lx, ly, lz);
+                    if(moving) move(blocks, ox, oy, oz, lx, ly, lz, first);
                 }
             }
             catch(RuntimeException ex) {
@@ -311,6 +324,7 @@ public final class WaterRenderer {
                 any = false;
             }
         }
+        WaterMotion.built(key, heights, BUFFER, duration);
 
         int list = DISPLAY_LISTS.get(key);
         if(!any) {
@@ -429,6 +443,31 @@ public final class WaterRenderer {
         return added;
     }
 
+    /**
+     * Works out where the vertices a cell just added were in the water as shown, so they move on from there, see
+     * WaterMotion. The cell is built again from the heights shown, unless nothing it looks at changed.
+     */
+    private static void move(SectionBlocks world, int ox, int oy, int oz, int lx, int ly, int lz, int first) {
+        int vertices = BUFFER.getVertexCount() - first;
+        if(vertices == 0) return;
+        int x = ox + lx, y = oy + ly, z = oz + lz;
+        if(WaterMotion.height(x, y, z) == 0) {
+            WaterMotion.rise(BUFFER, first, vertices, ly);
+            return;
+        }
+        if(!WaterMotion.changedAround(x, y, z)) {
+            WaterMotion.still(vertices);
+            return;
+        }
+        WaterMotion.capture();
+        try {
+            buildCell(world, ox, oy, oz, lx, ly, lz);
+        }
+        finally {
+            WaterMotion.endCapture(BUFFER, first, vertices);
+        }
+    }
+
     /** Whether a block beside is a thin block like a glass pane, the water reaching into it is drawn by {@link #thinBlocks} */
     private static boolean isThin(SectionBlocks world, int x, int y, int z) {
         return FluidicWater.isThin(world, new BlockPos(x, y, z), world.state(x, y, z));
@@ -450,8 +489,7 @@ public final class WaterRenderer {
                 // Lit by the thin block's own light, like ThinBlockWater.drawBesideWater lights settled water in it
                 int light = world.light(x + dx, y, z + dz);
                 int sky = (light >> 20 & 15) << 4, block = light & 65535;
-                added |= ThinBlockWater.draw(world, pos, state, true, (vx, vy, vz, u, v, shade) -> BUFFER.pos(vx, vy, vz)
-                        .color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex(),
+                added |= ThinBlockWater.draw(world, pos, state, true, (vx, vy, vz, u, v, shade) -> vertex(vx, vy, vz, u, v, sky, block, shade),
                         still, lx + dx, ly, lz + dz);
             }
         }
@@ -527,12 +565,14 @@ public final class WaterRenderer {
     }
 
     private static void vertex(float x, float y, float z, float u, float v, int sky, int block) {
-        BUFFER.pos(x, y, z).color(red, green, blue, 255).tex(u, v).lightmap(sky, block).endVertex();
+        vertex(x, y, z, u, v, sky, block, 1.0F);
     }
 
     /** A vertex shaded by the direction of its face, like vanilla shades block faces */
-    private static void vertex(float x, float y, float z, float u, float v, int sky, int block, float shade) {
-        BUFFER.pos(x, y, z).color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex();
+    private static void vertex(double x, double y, double z, float u, float v, int sky, int block, float shade) {
+        // Built again as the water is shown, only where the vertex was is kept, see WaterMotion
+        if(WaterMotion.capturing()) WaterMotion.captured((float)y);
+        else BUFFER.pos(x, y, z).color((int)(red * shade), (int)(green * shade), (int)(blue * shade), 255).tex(u, v).lightmap(sky, block).endVertex();
     }
 
     /**
@@ -576,15 +616,17 @@ public final class WaterRenderer {
      */
     private static float sharedCorner(SectionBlocks world, int x, int y, int z, int cx, int ly, int cz, float fallback, BlockPos cell) {
         int index = (cx * 17 + cz) * 16 + ly;
-        if(cornerGeneration[index] != generation) {
+        float[] values = WaterMotion.previous ? shownCorners : corners;
+        int[] generations = WaterMotion.previous ? shownCornerGeneration : cornerGeneration;
+        if(generations[index] != generation) {
             cornerDoors = false;
             // NaN where the cell's own surface is used
             float s = corner(world, x, y, z, Float.NaN, cell);
             if(cornerDoors) return Float.isNaN(s) ? fallback : s;
-            cornerGeneration[index] = generation;
-            corners[index] = s;
+            generations[index] = generation;
+            values[index] = s;
         }
-        float s = corners[index];
+        float s = values[index];
         return Float.isNaN(s) ? fallback : s;
     }
 

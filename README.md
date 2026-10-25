@@ -66,7 +66,9 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   thunders or below sea level, though soil keeps soaking water up. Lakes and oceans keep their water.
 * **Client rendering** (`WaterRenderer`). The server sends deflated per-cell heights of changed sections
   to players watching the chunk. The client compiles each section into a display list, with smoothed
-  corner heights, and draws it after the world. Shader packs only shade what the chunks draw, so while an
+  corner heights, and draws it after the world. Between updates the water moves on smoothly (`WaterMotion`): a rebuilt
+  mesh starts from where the water was shown and each frame moves its vertices on to the new heights, over about the
+  time between updates, so the water is shown up to one update behind (`Smooth Water Motion` in the client config). Shader packs only shade what the chunks draw, so while an
   shader pack is in use, and always with Celeritas or its forks like Voxtavium, whose own chunk lighting separately drawn water
   would not match (`Draw Simulated Water In Chunks` in the client config) simulated water is
   drawn by the chunks instead: while a chunk redraws, empty blocks holding simulated water read as water

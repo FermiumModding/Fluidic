@@ -262,6 +262,12 @@ public class ForgeConfigHandler {
 		public int meshRebuildsPerFrame = 24;
 
 		@Config.Comment({
+				"Moves simulated water smoothly from one update of the server to the next, instead of a step at each update.",
+				"The water is shown up to one update behind."})
+		@Config.Name("Smooth Water Motion")
+		public boolean smoothWater = true;
+
+		@Config.Comment({
 				"Draws simulated water as part of the chunks it is in, as water blocks, instead of separately. Shader packs",
 				"only shade what the chunks draw, so this is needed for them, but water moving makes its chunks redraw,",
 				"which costs more in busy weather.",
