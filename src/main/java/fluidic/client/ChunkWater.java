@@ -97,9 +97,17 @@ public final class ChunkWater {
         if(state.getMaterial() != Material.AIR) return state;
         int height = ClientWaterCache.heightAnyThread(x, y, z);
         if(height == 0) return state;
-        // Traces too thin to draw, see FluidicWater.MIN_DRAWN. Without the world here, wherever they rest.
-        if(height < FluidicWater.MIN_DRAWN) return state;
+        // Traces too thin to draw, see FluidicWater.MIN_DRAWN. Without the world here, wherever they rest, unless nearly full
+        // simulated water beside them makes them part of its surface, like FluidicWater.isTrace. Left out there, the water
+        // around would show a hole.
+        if(height < FluidicWater.MIN_DRAWN && !drawnBeside(x, y, z)) return state;
         return FluidicWater.state(Math.max(1, Math.round(height * Water.LEVELS / 255.0F)));
+    }
+
+    /** Whether simulated water beside a position makes a trace there part of the surface, see FluidicWater.isTrace */
+    private static boolean drawnBeside(int x, int y, int z) {
+        return ClientWaterCache.heightAnyThread(x - 1, y, z) >= FluidicWater.SURFACE_BESIDE || ClientWaterCache.heightAnyThread(x + 1, y, z) >= FluidicWater.SURFACE_BESIDE
+                || ClientWaterCache.heightAnyThread(x, y, z - 1) >= FluidicWater.SURFACE_BESIDE || ClientWaterCache.heightAnyThread(x, y, z + 1) >= FluidicWater.SURFACE_BESIDE;
     }
 
     /**

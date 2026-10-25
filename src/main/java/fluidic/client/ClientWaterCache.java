@@ -47,7 +47,7 @@ public final class ClientWaterCache {
             clear();
             dimension = packetDimension;
         }
-        WaterMotion.arrived(key, heights == null);
+        WaterMotion.arrived(key);
         // Water that settled into blocks keeps being drawn until the chunk is redrawn with the new blocks. That runs on
         // worker threads and can take many ticks in busy weather, until then the cell would show a hole.
         byte[] shown = heights;
@@ -106,6 +106,8 @@ public final class ClientWaterCache {
     private static void show(long key, byte[] heights) {
         Minecraft mc = Minecraft.getMinecraft();
         byte[] old = heights == null ? SECTIONS.remove(key) : SECTIONS.put(key, heights);
+        // Drawn easing there from where it is shown
+        WaterMotion.show(key, heights);
         if(old == null && heights == null) return;
 
         // Work out what changed, so only what depends on it is redrawn
@@ -216,10 +218,20 @@ public final class ClientWaterCache {
         return SECTIONS.containsKey(key);
     }
 
+    /** Height 0-255 of the water at a block position as sent, not eased, see WaterMotion */
+    static int sentHeight(int x, int y, int z) {
+        return SECTIONS.height(x, y, z);
+    }
+
     /** Height 0-255 of the water at a block position, client thread only */
     public static int height(int x, int y, int z) {
-        // A cell being built again as the water is shown, see WaterMotion
-        if(WaterMotion.previous) return WaterMotion.height(x, y, z);
+        // Against water blocks as their chunk was drawn, see ChunkRedraws.view
+        if(ChunkRedraws.viewing()) {
+            int drawn = ChunkRedraws.drawnHeight(x, y, z);
+            if(drawn >= 0) return drawn;
+        }
+        // A mesh being built from the eased heights, see WaterMotion
+        if(WaterMotion.easing) return WaterMotion.height(x, y, z);
         return SECTIONS.height(x, y, z);
     }
 
@@ -235,7 +247,12 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, safe from any thread */
     public static int heightAnyThread(int x, int y, int z) {
-        if(WaterMotion.previous && WaterMotion.onClientThread()) return WaterMotion.height(x, y, z);
+        // A chunk redraw reads the heights it began with throughout, see ChunkRedraws.beginRedraw
+        if(ChunkRedraws.viewing() && (ChunkRedraws.redrawing() || WaterMotion.onClientThread())) {
+            int drawn = ChunkRedraws.drawnHeight(x, y, z);
+            if(drawn >= 0) return drawn;
+        }
+        if(WaterMotion.easing && WaterMotion.onClientThread()) return WaterMotion.height(x, y, z);
         return SECTIONS.height(x, y, z);
     }
 

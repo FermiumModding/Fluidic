@@ -142,6 +142,8 @@ public final class WaterSimulation {
     private final LongArrayList poolMissing = new LongArrayList();
     /** Water soaked up by dry sponges so far, by block position */
     private final Long2IntOpenHashMap sponges = new Long2IntOpenHashMap();
+    /** Water pushed aside into settled water blocks being woken, added once their water is in the grid, by block position */
+    private final Long2IntOpenHashMap displacedInto = new Long2IntOpenHashMap();
     /** Block position / mass pairs */
     private final LongArrayList overflowCells = new LongArrayList();
     private StepResult result = new StepResult();
@@ -285,6 +287,17 @@ public final class WaterSimulation {
         // An ocean or river below sea level fills up open sky above it, so a river that lost water rises again
         boolean fillUp = reservoir && y + 1 < world.getSeaLevel() && FluidicWater.isUnderSky(world, pos.up());
         enqueue(sim -> sim.doNeighborCheck(x, y, z, level, reservoir, fillUp, codes));
+    }
+
+    /**
+     * Water of a block a block took the place of. A partly filled one pushes its water to the sides, see
+     * #doDisplaceSideways, a full one or one under more water, or one with no side to take it, onto the given block.
+     */
+    public void displace(BlockPos pos, int amount, boolean sideways, BlockPos top) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ(), tx = top.getX(), ty = top.getY(), tz = top.getZ();
+        enqueue(sim -> {
+            if(!sideways || !sim.doDisplaceSideways(x, y, z, amount)) sim.doAddWater(tx, ty, tz, amount, true);
+        });
     }
 
     public void chunkLoaded(int cx, int cz) {
@@ -1440,6 +1453,11 @@ public final class WaterSimulation {
         if(old == code || (old == WaterSection.WAKING && code >= WaterSection.SETTLED)) return;
         if(old == WaterSection.SPONGE) sponges.remove(blockPos(section, i));
         section.terrain[i] = code;
+        // Woken, or something else took its place, water pushed aside into it waited for this
+        if(old == WaterSection.WAKING && !displacedInto.isEmpty()) {
+            int extra = displacedInto.remove(blockPos(section, i));
+            if(extra > 0) doAddWater(section.sx * 16 + (i & 15), section.sy * 16 + (i >> 8), section.sz * 16 + ((i >> 4) & 15), extra, true);
+        }
         // A block water can flow into took the place of a solid one. Settled water on it or beside it may have been
         // placed after the step that would have woken it was worked out, it would hang in the air.
         if(WaterSection.holds(code) && !WaterSection.holds(old) && old < WaterSection.SETTLED && old != WaterSection.WAKING
@@ -1457,11 +1475,65 @@ public final class WaterSimulation {
         if(!WaterSection.holds(code) && mass > 0) {
             // Lava flowing into water turns to stone
             if(code == WaterSection.SOLID_REACTIVE) result.quenches.add(blockPos(section, i));
-            // A block was placed into water, push the water up out of it
+            // A block was placed into water. Partly filled with nothing above, it pushes the water to the sides, otherwise up
+            // out of it.
             section.removeMass(i, mass);
             section.dirtyNet = true;
-            doAddWater(section.sx * 16 + (i & 15), section.sy * 16 + (i >> 8) + 1, section.sz * 16 + ((i >> 4) & 15), mass, false);
+            int x = section.sx * 16 + (i & 15), y = section.sy * 16 + (i >> 8), z = section.sz * 16 + ((i >> 4) & 15);
+            if(mass >= Water.FULL || hasWater(x, y + 1, z) || !doDisplaceSideways(x, y, z, mass)) doAddWater(x, y + 1, z, mass, false);
         }
+    }
+
+    /** Whether there is water at a block, simulated or settled */
+    private boolean hasWater(int x, int y, int z) {
+        WaterSection section = readySection(x, y, z);
+        if(section == null) return false;
+        int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        int code = section.terrain[i];
+        return section.mass[i] > 0 || code >= WaterSection.SETTLED || code == WaterSection.WAKING;
+    }
+
+    /**
+     * Pushes water out of a block to the sides that can take more, split evenly. Open blocks get their share right away.
+     * Water blocks that are not full are woken, their share added once their water is in the grid, and the pool they
+     * belong to levels out from there. False when no side can take any.
+     */
+    private boolean doDisplaceSideways(int x, int y, int z, int amount) {
+        WaterSection[] sides = new WaterSection[4];
+        int[] cells = new int[4];
+        int count = 0;
+        for(int dir = Water.NORTH; dir <= Water.EAST; dir++) {
+            int nx = x + Water.DX[dir], nz = z + Water.DZ[dir];
+            WaterSection side = readySection(nx, y, nz);
+            if(side == null) continue;
+            int ni = Water.cellIndex(nx & 15, y & 15, nz & 15);
+            int code = side.terrain[ni];
+            // Not across the closed side of a door
+            boolean open = WaterSection.holds(code) && !WaterSection.blocksSide(code, dir ^ 1) && side.mass[ni] < Water.FULL;
+            boolean settled = code == WaterSection.WAKING || code >= WaterSection.SETTLED && code - WaterSection.SETTLED < Water.LEVELS;
+            if(!open && !settled) continue;
+            sides[count] = side;
+            cells[count++] = ni;
+        }
+        if(count == 0) return false;
+        for(int n = 0; n < count; n++) {
+            WaterSection side = sides[n];
+            int ni = cells[n];
+            // The first side takes what does not divide
+            int share = amount / count + (n == 0 ? amount % count : 0);
+            int code = side.terrain[ni];
+            if(WaterSection.holds(code)) {
+                doAddWater(side.sx * 16 + (ni & 15), y, side.sz * 16 + ((ni >> 4) & 15), share, false);
+                continue;
+            }
+            long pos = blockPos(side, ni);
+            if(code != WaterSection.WAKING) {
+                side.terrain[ni] = WaterSection.WAKING;
+                result.wakes.add(pos);
+            }
+            displacedInto.addTo(pos, share);
+        }
+        return true;
     }
 
     private void wakeSettledAround(WaterSection section, int i) {

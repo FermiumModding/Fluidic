@@ -1,6 +1,7 @@
 package fluidic.mixin.vanilla;
 
 import fluidic.block.FluidicWater;
+import fluidic.client.ChunkRedraws;
 import fluidic.client.ChunkWater;
 import fluidic.client.ThinBlockWater;
 import fluidic.sim.Water;
@@ -22,7 +23,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * Draws the simulated water inside a block like sugar cane, as water, in the turn the block got in the translucent
  * layer for it. The block itself is drawn in its own layer as usual. See {@link ChunkWater#wantsWaterLayer}.
- * Also draws water beside thin blocks like glass panes reaching into them, see {@link ThinBlockWater}.
+ * Also draws water beside thin blocks like glass panes reaching into them, see {@link ThinBlockWater}, and leaves water
+ * blocks near simulated water to WaterRenderer.
  */
 @Mixin(BlockRendererDispatcher.class)
 public abstract class BlockRendererDispatcherMixin {
@@ -33,6 +35,11 @@ public abstract class BlockRendererDispatcherMixin {
 
     @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void fluidic_waterInside(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer, CallbackInfoReturnable<Boolean> cir) {
+        // Water blocks near simulated water are drawn with it by WaterRenderer, see ChunkRedraws.Snapshot
+        if(FluidicWater.isWater(state) && ChunkRedraws.takenInRedraw(pos)) {
+            cir.setReturnValue(false);
+            return;
+        }
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
         if(layer == BlockRenderLayer.TRANSLUCENT && FluidicWater.isThin(world, pos, state)) {
             int start = buffer.getVertexCount();

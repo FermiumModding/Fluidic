@@ -2,59 +2,55 @@ package fluidic.client;
 
 import fluidic.handlers.ForgeConfigHandler;
 import fluidic.sim.Water;
-import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.BufferBuilder;
-import net.minecraft.client.renderer.GLAllocation;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.vertex.VertexFormat;
-import net.minecraft.client.renderer.vertex.VertexFormatElement;
-import org.lwjgl.opengl.GL11;
+import net.minecraft.entity.Entity;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+import javax.annotation.Nullable;
 
 /**
  * Smooths simulated water between the heights the server sends. Each update moves the water a step at once, at most 20
- * times a second and not evenly spaced, which looks like a low frame rate. When a section's mesh is rebuilt, each vertex
- * also gets its height in the water as shown at that moment, and the frames after move it on to its new height over
- * about the time between updates of the section. Only the heights are written each frame, the mesh is not rebuilt.
- * Client thread only, apart from {@link #previous}.
+ * times a second and not evenly spaced, which looks like a low frame rate. Instead each section eases its heights from
+ * where the water is shown to the heights sent, over about the time between its updates, and WaterRenderer builds it from
+ * the eased heights every frame, the same way it draws water at rest. Every frame is a whole surface, faces come and go
+ * where the eased water crosses the heights they depend on. Client thread only, apart from {@link #easing}.
  */
 final class WaterMotion {
 
     /** Shortest and longest time the water takes to reach the heights sent, in nanoseconds */
     private static final long MIN_NANOS = 50_000_000L;
     private static final long MAX_NANOS = 500_000_000L;
+    /** Sections further away than this many chunks show new heights at once, their water is not rebuilt every frame */
+    private static final int EASE_DISTANCE = 4;
+    private static final byte[] NO_WATER = new byte[4096];
+    /** Least change of a cell that is eased, 1/32 of a block. Less is shown at once, see show. */
+    private static final int MIN_EASED = 8;
 
     private static final Long2ObjectOpenHashMap<Motion> SECTIONS = new Long2ObjectOpenHashMap<>();
-    /** Set while a cell is built again as the water was shown, height lookups on the client thread then read it */
-    static boolean previous;
+    /** Sections easing toward new heights, WaterRenderer rebuilds them and the sections around them every frame */
+    private static final LongOpenHashSet MOVING = new LongOpenHashSet();
+    /** Set while WaterRenderer builds a mesh, height lookups on the client thread then read the eased heights */
+    static boolean easing;
     /** Time of the frame being drawn */
     private static long now = System.nanoTime();
-    /** Heights of the vertices of a cell built again as the water was shown */
-    private static final FloatArrayList CAPTURED = new FloatArrayList();
-    private static boolean capturing;
-    /** Shown heights by vertex of the mesh being built, NaN where a vertex does not move */
-    private static final FloatArrayList FROM = new FloatArrayList();
-    private static boolean moving;
     private static long lastKey = Long.MIN_VALUE;
     private static Motion last;
 
     private WaterMotion() {}
 
     private static final class Motion {
-        /** Heights moved from and to, from is null when at rest */
+        /** Heights eased from and to, from is null at rest */
         byte[] from, to;
+        /** The sections around it the cells easing reach, see nearBorders */
+        int borders;
         long start, duration;
         /** When the last update arrived, and the time between updates, smoothed */
         long arrived;
         long interval = MIN_NANOS;
-        /** While moving: the mesh, its vertices written at their heights this frame, and their heights both ways */
-        ByteBuffer vertices;
-        int count, stride, yOffset;
-        float[] fromY, toY;
     }
 
     /** A frame starts, the water moving is shown as it is at this time */
@@ -63,11 +59,10 @@ final class WaterMotion {
     }
 
     /** New heights of a section arrived, the time since the last ones is how long the water takes to reach them */
-    static void arrived(long key, boolean empty) {
+    static void arrived(long key) {
         long time = System.nanoTime();
         Motion motion = SECTIONS.get(key);
         if(motion == null) {
-            if(empty) return;
             motion = new Motion();
             SECTIONS.put(key, motion);
             forget();
@@ -80,13 +75,116 @@ final class WaterMotion {
         motion.arrived = time;
     }
 
+    /**
+     * A section shows new heights, null when it has none. It eases there from where it is shown now. A section shown for
+     * the first time, far away, or with smoothing off shows them at once.
+     */
+    static void show(long key, @Nullable byte[] heights) {
+        Motion motion = SECTIONS.get(key);
+        if(motion == null) {
+            if(heights == null) return;
+            motion = new Motion();
+            motion.arrived = now;
+            SECTIONS.put(key, motion);
+            forget();
+        }
+        byte[] to = heights != null ? heights : NO_WATER;
+        if(motion.to == null || !ForgeConfigHandler.client.smoothWater || ChunkWater.isActive() || far(key)) {
+            motion.to = to;
+            motion.from = null;
+            MOVING.remove(key);
+            return;
+        }
+        byte[] from = new byte[4096];
+        for(int i = 0; i < 4096; i++) from[i] = (byte)shown(motion, i);
+        // Water falling into a cell from the cell above, like a pool into a hole under it, fills it at once. It is under
+        // the surface, while the water above goes down. Eased both, the water above would float over a half empty cell.
+        for(int i = 0; i < 4096; i++) {
+            if((to[i] & 255) > (from[i] & 255) && drainsAbove(key, i, from, to)) from[i] = to[i];
+        }
+        // Too little moves to see, like rain landing on a pool, it is shown at once. Eased, the section and the ones around it
+        // would be rebuilt every frame for nothing.
+        int most = 0, borders = 0;
+        for(int i = 0; i < 4096; i++) {
+            int change = Math.abs((to[i] & 255) - (from[i] & 255));
+            if(change == 0) continue;
+            most = Math.max(most, change);
+            borders |= nearBorders(i & 15, i >> 8, (i >> 4) & 15);
+        }
+        motion.to = to;
+        if(most < MIN_EASED) {
+            motion.from = null;
+            MOVING.remove(key);
+            return;
+        }
+        motion.from = from;
+        motion.borders = borders;
+        motion.start = now;
+        motion.duration = motion.interval;
+        MOVING.add(key);
+    }
+
+    /** Whether the cell above a cell of a section loses water, as shown and sent */
+    private static boolean drainsAbove(long key, int i, byte[] from, byte[] to) {
+        if((i >> 8) < 15) return (to[i + 256] & 255) < (from[i + 256] & 255);
+        int sy = Water.keyY(key);
+        if(sy >= 15) return false;
+        Motion motion = SECTIONS.get(Water.sectionKey(Water.keyX(key), sy + 1, Water.keyZ(key)));
+        int j = i & 255;
+        return motion != null && motion.from != null && (motion.to[j] & 255) < (motion.from[j] & 255);
+    }
+
+    /**
+     * The sections around a section whose meshes a change of a cell in it reaches, as bits by offset, see
+     * WaterRenderer.markDirty. The corners and faces along a border look one cell into the section beside it, and the
+     * cell beside that tells whether it is a trace or a thin layer.
+     */
+    private static int nearBorders(int x, int y, int z) {
+        int bits = 0;
+        for(int dx = x <= 1 ? -1 : 0; dx <= (x >= 14 ? 1 : 0); dx++) {
+            for(int dy = y <= 1 ? -1 : 0; dy <= (y >= 14 ? 1 : 0); dy++) {
+                for(int dz = z <= 1 ? -1 : 0; dz <= (z >= 14 ? 1 : 0); dz++) bits |= 1 << ((dx + 1) * 9 + (dy + 1) * 3 + dz + 1);
+            }
+        }
+        return bits;
+    }
+
+    /** Whether a section is too far from the camera to ease */
+    private static boolean far(long key) {
+        Entity view = Minecraft.getMinecraft().getRenderViewEntity();
+        if(view == null) return true;
+        int cx = MathHelper.floor(view.posX) >> 4, cz = MathHelper.floor(view.posZ) >> 4;
+        return Math.max(Math.abs(Water.keyX(key) - cx), Math.abs(Water.keyZ(key) - cz)) > EASE_DISTANCE;
+    }
+
+    /**
+     * The chunk stopped drawing a water block of this height, 0-255. Simulated water there was not drawn while it was, or
+     * had none yet, and eases on from the block.
+     */
+    static void uncovered(BlockPos pos, int height) {
+        if(!ForgeConfigHandler.client.smoothWater) return;
+        long key = Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
+        Motion motion = SECTIONS.get(key);
+        if(motion == null || motion.to == null || far(key)) return;
+        byte[] from = new byte[4096];
+        for(int i = 0; i < 4096; i++) from[i] = (byte)shown(motion, i);
+        from[Water.cellIndex(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15)] = (byte)Math.max(1, height);
+        motion.borders |= nearBorders(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+        motion.from = from;
+        motion.start = now;
+        motion.duration = motion.interval;
+        MOVING.add(key);
+    }
+
     static void unload(long key) {
         SECTIONS.remove(key);
+        MOVING.remove(key);
         forget();
     }
 
     static void clear() {
         SECTIONS.clear();
+        MOVING.clear();
         forget();
     }
 
@@ -107,9 +205,8 @@ final class WaterMotion {
         return motion.from == null || motion.duration <= 0 ? 1.0F : Math.min(1.0F, (float)(now - motion.start) / motion.duration);
     }
 
-    /** Height 0-255 of a cell as its section's mesh shows it this frame */
+    /** Height 0-255 of a cell of a section as eased this frame */
     private static int shown(Motion motion, int i) {
-        if(motion == null || motion.to == null) return 0;
         int to = motion.to[i] & 255;
         float t = progress(motion);
         if(t >= 1.0F) return to;
@@ -117,186 +214,52 @@ final class WaterMotion {
         return Math.round(from + (to - from) * t);
     }
 
-    /** Height 0-255 of the water at a block position as shown this frame */
+    /** Height 0-255 of the water at a block position as eased this frame, as sent where nothing eases */
     static int height(int x, int y, int z) {
         if(y < 0 || y > 255) return 0;
-        return shown(motion(Water.sectionKey(x >> 4, y >> 4, z >> 4)), Water.cellIndex(x & 15, y & 15, z & 15));
+        Motion motion = motion(Water.sectionKey(x >> 4, y >> 4, z >> 4));
+        if(motion == null || motion.to == null) return ClientWaterCache.sentHeight(x, y, z);
+        return shown(motion, Water.cellIndex(x & 15, y & 15, z & 15));
     }
 
-    /** Whether the water as shown differs from the water sent around a cell, as far as its faces look */
-    static boolean changedAround(int x, int y, int z) {
-        for(int dy = -1; dy <= 1; dy++) {
-            for(int dx = -1; dx <= 1; dx++) {
-                for(int dz = -1; dz <= 1; dz++) {
-                    if(height(x + dx, y + dy, z + dz) != ClientWaterCache.height(x + dx, y + dy, z + dz)) return true;
-                }
+    /** The heights of a section as eased this frame, null when it has no water and none easing out */
+    @Nullable
+    static byte[] section(long key) {
+        Motion motion = SECTIONS.get(key);
+        if(motion == null || motion.to == null) return ClientWaterCache.section(key);
+        if(progress(motion) >= 1.0F) return motion.to == NO_WATER ? null : motion.to;
+        byte[] heights = new byte[4096];
+        for(int i = 0; i < 4096; i++) heights[i] = (byte)shown(motion, i);
+        return heights;
+    }
+
+    /**
+     * The sections to build this frame: those easing and the ones around them the easing cells reach, which share their
+     * corners. Those that reached their heights are built once more there and are at rest after.
+     */
+    static LongOpenHashSet moving() {
+        LongOpenHashSet sections = new LongOpenHashSet();
+        for(LongIterator it = MOVING.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            Motion motion = SECTIONS.get(key);
+            int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
+            int borders = motion == null ? 0 : motion.borders;
+            sections.add(key);
+            for(int bit = 0; bit < 27; bit++) {
+                if((borders & (1 << bit)) == 0 || bit == 13) continue;
+                int ny = sy + bit / 3 % 3 - 1;
+                if(ny >= 0 && ny <= 15) sections.add(Water.sectionKey(sx + bit / 9 - 1, ny, sz + bit % 3 - 1));
+            }
+            if(motion == null || progress(motion) >= 1.0F) {
+                it.remove();
+                if(motion != null) motion.from = null;
             }
         }
-        return false;
+        return sections;
     }
 
     /** Whether lookups now are on the client thread, chunk render threads always read the heights sent */
     static boolean onClientThread() {
         return Minecraft.getMinecraft().isCallingFromMinecraftThread();
-    }
-
-    // ---------------------------------------------------------------- building
-
-    /**
-     * A section's mesh is rebuilt, returns whether its vertices move on from where the water is shown. A section
-     * drawn for the first time shows its heights at once.
-     */
-    static boolean begin(long key) {
-        FROM.clear();
-        Motion motion = SECTIONS.get(key);
-        moving = ForgeConfigHandler.client.smoothWater && motion != null && motion.to != null;
-        return moving;
-    }
-
-    /** Vertices of a cell were added that do not move */
-    static void still(int vertices) {
-        for(int n = 0; n < vertices; n++) FROM.add(Float.NaN);
-    }
-
-    /** Vertices of a cell that had no water shown, they rise from the floor of its block */
-    static void rise(BufferBuilder buffer, int first, int vertices, int ly) {
-        VertexFormat format = buffer.getVertexFormat();
-        int stride = format.getSize(), offset = format.getOffset(0) + 4;
-        ByteBuffer bytes = buffer.getByteBuffer();
-        for(int n = 0; n < vertices; n++) {
-            float y = bytes.getFloat((first + n) * stride + offset);
-            FROM.add(y > ly ? ly : Float.NaN);
-        }
-    }
-
-    /** Starts building a cell again as the water is shown, its vertices go to {@link #captured} instead of the mesh */
-    static void capture() {
-        CAPTURED.clear();
-        capturing = true;
-        previous = true;
-    }
-
-    static boolean capturing() {
-        return capturing;
-    }
-
-    static void captured(float y) {
-        CAPTURED.add(y);
-    }
-
-    /**
-     * Ends building a cell as the water is shown. Built with the same faces both ways, each vertex moves from one height
-     * to the other. A cell whose faces changed shows its new ones at once.
-     */
-    static void endCapture(BufferBuilder buffer, int first, int vertices) {
-        capturing = false;
-        previous = false;
-        if(CAPTURED.size() != vertices) {
-            still(vertices);
-            return;
-        }
-        VertexFormat format = buffer.getVertexFormat();
-        int stride = format.getSize(), offset = format.getOffset(0) + 4;
-        ByteBuffer bytes = buffer.getByteBuffer();
-        for(int n = 0; n < vertices; n++) {
-            float y = bytes.getFloat((first + n) * stride + offset), from = CAPTURED.getFloat(n);
-            FROM.add(from == y ? Float.NaN : from);
-        }
-    }
-
-    /**
-     * A section's mesh was built from these heights, null when it has no water, moving on from where the water is
-     * shown over the given time. The buffer is finished.
-     */
-    static void built(long key, byte[] heights, BufferBuilder buffer, long duration) {
-        capturing = previous = false;
-        if(heights == null) {
-            unload(key);
-            return;
-        }
-        Motion motion = SECTIONS.get(key);
-        if(motion == null) {
-            motion = new Motion();
-            motion.arrived = now;
-            SECTIONS.put(key, motion);
-            forget();
-        }
-        byte[] from = null;
-        if(moving) {
-            from = new byte[4096];
-            for(int i = 0; i < 4096; i++) from[i] = (byte)shown(motion, i);
-        }
-        motion.from = from;
-        motion.to = heights;
-        motion.start = now;
-        motion.duration = duration;
-        motion.vertices = null;
-        motion.fromY = motion.toY = null;
-        if(!moving) return;
-
-        int count = Math.min(buffer.getVertexCount(), FROM.size());
-        VertexFormat format = buffer.getVertexFormat();
-        int stride = format.getSize(), offset = format.getOffset(0) + 4;
-        ByteBuffer source = buffer.getByteBuffer();
-        float[] fromY = null, toY = null;
-        for(int n = 0; n < count; n++) {
-            float f = FROM.getFloat(n);
-            if(Float.isNaN(f)) continue;
-            if(fromY == null) {
-                fromY = new float[count];
-                toY = new float[count];
-                for(int m = 0; m < count; m++) fromY[m] = toY[m] = source.getFloat(m * stride + offset);
-            }
-            fromY[n] = f;
-        }
-        if(fromY == null) return;
-        ByteBuffer copy = GLAllocation.createDirectByteBuffer(count * stride);
-        ByteBuffer view = source.duplicate();
-        view.position(0);
-        view.limit(count * stride);
-        copy.put(view);
-        copy.flip();
-        motion.vertices = copy;
-        motion.count = count;
-        motion.stride = stride;
-        motion.yOffset = offset;
-        motion.fromY = fromY;
-        motion.toY = toY;
-    }
-
-    /** How long a section's water takes to reach new heights, in nanoseconds */
-    static long duration(long key) {
-        Motion motion = SECTIONS.get(key);
-        return motion == null ? MIN_NANOS : motion.interval;
-    }
-
-    // ---------------------------------------------------------------- drawing
-
-    /** Draws a section's mesh while it is moving, false when it is at rest and its display list draws it */
-    static boolean draw(long key, VertexFormat format) {
-        Motion motion = motion(key);
-        if(motion == null || motion.vertices == null) return false;
-        float t = progress(motion);
-        if(t >= 1.0F) {
-            motion.vertices = null;
-            motion.fromY = motion.toY = null;
-            return false;
-        }
-        // Linear, water flowing on steadily keeps its speed from one update to the next
-        ByteBuffer vertices = motion.vertices;
-        float[] fromY = motion.fromY, toY = motion.toY;
-        for(int n = 0; n < motion.count; n++) {
-            float from = fromY[n], to = toY[n];
-            if(from != to) vertices.putFloat(n * motion.stride + motion.yOffset, from + (to - from) * t);
-        }
-        List<VertexFormatElement> elements = format.getElements();
-        for(int j = 0; j < elements.size(); j++) {
-            vertices.position(format.getOffset(j));
-            elements.get(j).getUsage().preDraw(format, j, motion.stride, vertices);
-        }
-        GlStateManager.glDrawArrays(GL11.GL_QUADS, 0, motion.count);
-        for(int j = 0; j < elements.size(); j++) elements.get(j).getUsage().postDraw(format, j, motion.stride, vertices);
-        vertices.position(0);
-        return true;
     }
 }

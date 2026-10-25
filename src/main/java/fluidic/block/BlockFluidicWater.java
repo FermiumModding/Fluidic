@@ -345,10 +345,11 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     public boolean shouldSideBeRendered(@Nonnull IBlockState state, @Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull EnumFacing side) {
         if(!FluidicWater.isFinite(world)) return super.shouldSideBeRendered(state, world, pos, side);
         BlockPos offset = pos.offset(side);
-        boolean simulated = FluidicWater.simHeight(offset) > 0;
+        // Simulated water drawn there, a trace is not and the side shows, see FluidicWater.drawnSimulated
+        boolean simulated = FluidicWater.drawnSimulated(world, offset);
         // Simulated water is drawn by the client renderer, its top and bottom meet this water without a face
-        // Not a trace too thin to draw resting on it, see FluidicWater.MIN_DRAWN
-        if(simulated && (side == EnumFacing.DOWN || FluidicWater.simHeight(offset) >= FluidicWater.MIN_DRAWN)) return false;
+        // Not a trace too thin to draw resting on it, see FluidicWater.MIN_DRAWN. Beside it, see below.
+        if(simulated && side.getAxis() == EnumFacing.Axis.Y) return false;
         // Water reaches into a thin block beside it like a glass pane, drawn by the block up to the glass
         if(side.getAxis() != EnumFacing.Axis.Y) {
             IBlockState beside = world.getBlockState(offset);
@@ -358,7 +359,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         if(side == EnumFacing.UP && FluidicWater.underCeiling(world, pos) && FluidicWater.renderHeight(world, pos) >= 1.0F) return false;
         // Water surfaces meet at shared corners, so no face is drawn between them, except where this water continues
         // up and stands above the water beside it. Rain settling on a full pool makes the block under it full height,
-        // and the step down to the pool around it would show a gap.
+        // and the step down to the pool around it would show a gap. Simulated water beside it does not draw that step,
+        // it only draws faces down from itself.
         if(side.getAxis() != EnumFacing.Axis.Y && (simulated || world.getBlockState(offset).getMaterial() == Material.WATER)) {
             return FluidicWater.renderHeight(world, pos) >= 1.0F && FluidicWater.renderHeight(world, offset) < 1.0F;
         }

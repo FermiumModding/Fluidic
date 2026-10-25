@@ -42,6 +42,8 @@ public final class FluidicWater {
     private static final ThreadLocal<BlockPos> RENDERING = new ThreadLocal<>();
     /** How far inside the block edge vanilla draws the side faces of liquids */
     private static final double SIDE_INSET = 0.0010000000474974513D;
+    /** Vanilla draws water surfaces this far under their corners, against the block above */
+    public static final float SURFACE_DROP = 0.001F;
 
     private FluidicWater() {}
 
@@ -156,11 +158,39 @@ public final class FluidicWater {
      */
     public static final int MIN_DRAWN = 16;
 
-    /** Whether simulated water resting on water at a position is too little to draw, see MIN_DRAWN */
+    /**
+     * Simulated water beside a trace that makes it part of the surface, see isTrace: water this full at its level, like
+     * the pool around the water above a hole that just fell into it. A trace on top of a pool beside a thin layer stays
+     * one, drawn it would raise the pool under it to the top of its block as it comes and goes.
+     */
+    public static final int SURFACE_BESIDE = 255 * 7 / 8;
+
+    /**
+     * Whether simulated water resting on water at a position is too little to draw, see MIN_DRAWN. Only on top of the
+     * water: beside water drawn at its level, like the water above a hole that just fell into it, it is part of that
+     * surface, and left out the water around would show a hole down to the water below, see SURFACE_BESIDE. By the
+     * simulated water beside it alone, the chunks drawing simulated water decide the same without the world, see
+     * ChunkWater.substitute.
+     */
     public static boolean isTrace(IBlockAccess world, BlockPos pos, int height) {
         if(height <= 0 || height >= MIN_DRAWN || pos.getY() <= 0) return false;
         BlockPos below = pos.down();
-        return world.getBlockState(below).getMaterial().isLiquid() || simHeight(below) > 0;
+        if(!world.getBlockState(below).getMaterial().isLiquid() && simHeight(below) == 0) return false;
+        for(EnumFacing side : EnumFacing.HORIZONTALS) {
+            if(simHeight(pos.offset(side)) >= SURFACE_BESIDE) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Whether simulated water at a position is drawn by WaterRenderer, so water blocks beside it draw no face toward it.
+     * A trace is not drawn and leaves a gap like air, see isTrace. Drawn by the chunks, the simulated water drawn reads
+     * as water blocks there, and none other is.
+     */
+    public static boolean drawnSimulated(IBlockAccess world, BlockPos pos) {
+        if(simulatedInChunks) return false;
+        int height = simHeight(pos);
+        return height > 0 && !isTrace(world, pos, height);
     }
 
     /** Water below a thin layer counts as full from this height, 7/8 of a block */
@@ -187,12 +217,17 @@ public final class FluidicWater {
         return here >= MIN_DRAWN && here <= FILM_MAX && waterHeight(world, pos.down()) >= FILM_BASE && waterHeight(world, pos.up()) == 0;
     }
 
-    /** Water in a block, 0-255, a water block or simulated water */
+    /**
+     * Water in a block, 0-255, a water block or simulated water. Simulated water in eighths, as the chunks drawing it see
+     * it as water blocks, see ChunkWater.substitute: drawn separately, a thin layer is taken for one just the same. Water
+     * moving through the heights in between would otherwise flicker in and out of being one.
+     */
     private static int waterHeight(IBlockAccess world, BlockPos pos) {
         IBlockState state = world.getBlockState(pos);
         if(isWater(state)) return level(state) * 255 / Water.LEVELS;
         if(state.getMaterial().isLiquid()) return 255;
-        return simHeight(pos);
+        int sim = simHeight(pos);
+        return sim == 0 ? 0 : Math.max(1, Math.round(sim * Water.LEVELS / 255.0F)) * 255 / Water.LEVELS;
     }
 
     /**
@@ -200,7 +235,7 @@ public final class FluidicWater {
      * layer resting on it, enough alone, 1 for a stream falling in, which takes two side by side, see surfaceCorner
      */
     public static int sheetWeight(IBlockAccess world, BlockPos above) {
-        if(!world.getBlockState(above).getMaterial().isLiquid() && simHeight(above) < MIN_DRAWN) return 0;
+        if(!world.getBlockState(above).getMaterial().isLiquid() && simHeight(above) < MIN_DRAWN && !drawnSimulated(world, above)) return 0;
         return isFilm(world, above) ? 2 : 1;
     }
 
@@ -212,7 +247,8 @@ public final class FluidicWater {
         IBlockState state = world.getBlockState(pos);
         // Water continues up into a water block or into simulated water, like rain landing on a pool. Either way
         // the water below fills its block, without a gap under the water above it.
-        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN;
+        // A trace drawn as part of the surface beside it counts too, see drawnSimulated
+        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN || drawnSimulated(world, pos.up());
         if(!state.getMaterial().isLiquid()) {
             int sim = simHeight(pos);
             if(sim > 0) return waterAbove || sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
@@ -352,7 +388,7 @@ public final class FluidicWater {
             }
             if(height < 0.0F) continue;
             // Like WaterRenderer.corner: a trace below is not drawn, see MIN_DRAWN
-            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) >= MIN_DRAWN)) edge = true;
+            if(film && height == 0.0F && (world.getBlockState(cell.down()).getMaterial().isLiquid() || simHeight(cell.down()) >= MIN_DRAWN || drawnSimulated(world, cell.down()))) edge = true;
             if(height >= Water.RENDER_HEIGHT) {
                 sum += height * 10.0F;
                 count += 10;
@@ -376,17 +412,52 @@ public final class FluidicWater {
      * ends at that surface. Side vertices sit 0.001 inside the block edge, which tells them from the bottom face.
      */
     public static double sideBottom(IBlockAccess world, BlockPos pos, double x, double y, double z) {
-        double fx = x - pos.getX(), fz = z - pos.getZ();
-        EnumFacing side;
-        if(Math.abs(fx - SIDE_INSET) < SIDE_INSET / 2) side = EnumFacing.WEST;
-        else if(Math.abs(fx - 1.0D + SIDE_INSET) < SIDE_INSET / 2) side = EnumFacing.EAST;
-        else if(Math.abs(fz - SIDE_INSET) < SIDE_INSET / 2) side = EnumFacing.NORTH;
-        else if(Math.abs(fz - 1.0D + SIDE_INSET) < SIDE_INSET / 2) side = EnumFacing.SOUTH;
-        else return y;
+        EnumFacing side = sideOf(pos, x, z);
+        if(side == null) return y;
         BlockPos offset = pos.offset(side);
-        if(world.getBlockState(offset).getMaterial() != Material.WATER && simHeight(offset) == 0) return y;
+        if(!waterAt(world, offset)) {
+            // Over a ledge onto water below, drawn just under the top of its block, the face reaches down to it
+            boolean open = !world.getBlockState(offset).getMaterial().blocksMovement();
+            return open && waterAt(world, offset.down()) ? y - SURFACE_DROP : y;
+        }
         float beside = renderHeight(world, offset);
         if(beside <= 0.0F || beside >= 1.0F) return y;
-        return y + surfaceCorner(world, new BlockPos(Math.round(x), pos.getY(), Math.round(z)), pos);
+        // Where the surface beside it is drawn, vanilla draws water surfaces just under their corners. At the corner itself
+        // the step would stand apart from that surface by as much, open along the edge.
+        return y + (double)(surfaceCorner(world, new BlockPos(Math.round(x), pos.getY(), Math.round(z)), pos) - SURFACE_DROP);
+    }
+
+    /**
+     * Where a vertex of a water block's side face goes along x, see {@link #sideZ}. Vanilla draws side faces 0.001 inside
+     * the block so they do not flicker against a block beside it. Against water there is nothing to flicker with, and set
+     * in the step down to that water would stand apart from the edge of its surface, a slit along it.
+     */
+    public static double sideX(IBlockAccess world, BlockPos pos, double x, double z) {
+        EnumFacing side = sideOf(pos, x, z);
+        if(side == null || side.getAxis() != EnumFacing.Axis.X || !waterAt(world, pos.offset(side))) return x;
+        return pos.getX() + (side == EnumFacing.EAST ? 1.0D : 0.0D);
+    }
+
+    /** Where a vertex of a water block's side face goes along z, see {@link #sideX} */
+    public static double sideZ(IBlockAccess world, BlockPos pos, double x, double z) {
+        EnumFacing side = sideOf(pos, x, z);
+        if(side == null || side.getAxis() != EnumFacing.Axis.Z || !waterAt(world, pos.offset(side))) return z;
+        return pos.getZ() + (side == EnumFacing.SOUTH ? 1.0D : 0.0D);
+    }
+
+    /** The side of a water block a vertex of its side faces is on, by the inset vanilla draws them at, null for others */
+    @Nullable
+    private static EnumFacing sideOf(BlockPos pos, double x, double z) {
+        double fx = x - pos.getX(), fz = z - pos.getZ();
+        if(Math.abs(fx - SIDE_INSET) < SIDE_INSET / 2) return EnumFacing.WEST;
+        if(Math.abs(fx - 1.0D + SIDE_INSET) < SIDE_INSET / 2) return EnumFacing.EAST;
+        if(Math.abs(fz - SIDE_INSET) < SIDE_INSET / 2) return EnumFacing.NORTH;
+        if(Math.abs(fz - 1.0D + SIDE_INSET) < SIDE_INSET / 2) return EnumFacing.SOUTH;
+        return null;
+    }
+
+    /** Whether a block holds water a water block's side faces meet, a water block or simulated water */
+    private static boolean waterAt(IBlockAccess world, BlockPos pos) {
+        return world.getBlockState(pos).getMaterial() == Material.WATER || drawnSimulated(world, pos);
     }
 }

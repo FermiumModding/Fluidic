@@ -86,7 +86,8 @@ final class WaterWorldListener implements IWorldEventListener {
 
     /**
      * A block took the place of a water block: sand fell in, a piston pushed in, a player built into a pool. Water is
-     * finite, so it moves instead of vanishing: into the block when water can be in it, like stairs, or on top of the
+     * finite, so it moves instead of vanishing: into the block when water can be in it, like stairs. A partly filled
+     * block with no water above it pushes its water to the sides, a full one or one under more water on top of the
      * water above it. Water taken out on purpose, leaving air, is gone. Ice keeps the water, and the sea is endless.
      */
     private void displaced(World world, BlockPos pos, IBlockState water, IBlockState block) {
@@ -102,7 +103,9 @@ final class WaterWorldListener implements IWorldEventListener {
         }
         BlockPos top = pos;
         while(top.getY() < 255 && world.isBlockLoaded(top.up()) && FluidicWater.isWater(world.getBlockState(top.up()))) top = top.up();
-        simulation.addWater(top.up(), amount);
+        // Simulated water above counts too, the block was under it
+        boolean under = top != pos || simulation.height(pos.getX(), pos.getY() + 1, pos.getZ()) > 0;
+        simulation.displace(pos, amount, FluidicWater.level(water) < Water.LEVELS && !under, top.up());
     }
 
     @Override

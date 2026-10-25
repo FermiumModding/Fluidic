@@ -27,17 +27,22 @@ public abstract class RenderChunkMixin {
 
     @Unique
     private long fluidic_redrawStarted;
+    /** What the redraw is drawn with, see ChunkRedraws.beginRedraw */
+    @Unique
+    private ChunkRedraws.Snapshot fluidic_redrawSnapshot;
 
     @Inject(method = "rebuildChunk", at = @At("HEAD"), require = 0)
     private void fluidic_beginChunkWater(float x, float y, float z, ChunkCompileTaskGenerator generator, CallbackInfo ci) {
         ChunkWater.beginRedraw();
         ChunkLight.beginRedraw();
+        fluidic_redrawSnapshot = ChunkRedraws.beginRedraw(getPosition());
     }
 
     @Inject(method = "rebuildChunk", at = @At("RETURN"), require = 0)
     private void fluidic_endChunkWater(float x, float y, float z, ChunkCompileTaskGenerator generator, CallbackInfo ci) {
         ChunkWater.endRedraw();
         ChunkLight.endRedraw();
+        ChunkRedraws.endRedraw();
     }
 
     @Inject(method = "makeCompileTaskChunk", at = @At("HEAD"))
@@ -47,6 +52,6 @@ public abstract class RenderChunkMixin {
 
     @Inject(method = "setCompiledChunk", at = @At("HEAD"))
     private void fluidic_redrawn(CompiledChunk compiled, CallbackInfo ci) {
-        ChunkRedraws.drawn(getPosition(), fluidic_redrawStarted);
+        ChunkRedraws.drawn(getPosition(), fluidic_redrawStarted, fluidic_redrawSnapshot);
     }
 }

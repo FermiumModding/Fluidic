@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * Water corner heights from {@link FluidicWater#cornerHeight}: still surfaces stay flat next to waterfalls and
  * blend into water that is still being simulated, instead of vanilla's ramps. Side faces against lower water end
- * at its surface, see {@link FluidicWater#sideBottom}.
+ * at its surface, see {@link FluidicWater#sideBottom}, and stand on the block's edge, see {@link FluidicWater#sideX}.
  */
 @Mixin(BlockFluidRenderer.class)
 public abstract class BlockFluidRendererMixin {
@@ -33,7 +33,9 @@ public abstract class BlockFluidRendererMixin {
 
     @Redirect(method = "renderFluid", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;pos(DDD)Lnet/minecraft/client/renderer/BufferBuilder;"))
     private BufferBuilder fluidic_waterSideBottom(BufferBuilder buffer, double x, double y, double z, IBlockAccess world, IBlockState state, BlockPos pos, BufferBuilder target) {
-        if(y == pos.getY() && state.getMaterial() == Material.WATER && FluidicWater.isFinite(world)) y = FluidicWater.sideBottom(world, pos, x, y, z);
-        return buffer.pos(x, y, z);
+        if(state.getMaterial() != Material.WATER || !FluidicWater.isFinite(world)) return buffer.pos(x, y, z);
+        if(y == pos.getY()) y = FluidicWater.sideBottom(world, pos, x, y, z);
+        // Side faces against water stand on the block's edge, see FluidicWater.sideX
+        return buffer.pos(FluidicWater.sideX(world, pos, x, z), y, FluidicWater.sideZ(world, pos, x, z));
     }
 }
