@@ -48,11 +48,15 @@ public final class ChunkLight {
     public static int dimmed(int sky, int x, int y, int z) {
         if(sky == 0) return sky;
         float dim = 0.0F;
-        for(int dy = 0; dy < MAX_DEPTH && y + dy <= 255; dy++) {
+        int dy = 0, first = 0;
+        for(; dy < MAX_DEPTH && y + dy <= 255; dy++) {
             int height = ClientWaterCache.heightAnyThread(x, y + dy, z);
             if(height == 0) break;
+            if(dy == 0) first = height;
             dim += DIM_PER_BLOCK * height / 255.0F;
         }
+        // A puddle, shallow with no water above or below, hardly takes any light away
+        if(dy == 1 && first <= ClientWaterCache.PUDDLE_DEPTH && ClientWaterCache.heightAnyThread(x, y - 1, z) == 0) return sky;
         return Math.max(0, sky - Math.round(dim));
     }
 

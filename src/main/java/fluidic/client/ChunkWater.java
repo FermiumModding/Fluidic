@@ -168,7 +168,14 @@ public final class ChunkWater {
     /** Marks the chunks around changed simulated water for redrawing */
     static void redraw(int x0, int y0, int z0, int x1, int y1, int z1) {
         Minecraft mc = Minecraft.getMinecraft();
-        if(mc.world != null) mc.world.markBlockRangeForRenderUpdate(x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
+        if(mc.world == null) return;
+        ChunkRedraws.setWaterRedraw(true);
+        try {
+            mc.world.markBlockRangeForRenderUpdate(x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
+        }
+        finally {
+            ChunkRedraws.setWaterRedraw(false);
+        }
     }
 
     /**

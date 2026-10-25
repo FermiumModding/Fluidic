@@ -24,6 +24,8 @@
     "vanilla.EntityRendererAccessor",
     "vanilla.EntityRendererMixin",
     "vanilla.RenderChunkMixin",
+    "vanilla.RenderGlobalMixin",
+    "vanilla.RenderInfoAccessor",
     "vanilla.WorldClientMixin"
   ],
   "injectors": {

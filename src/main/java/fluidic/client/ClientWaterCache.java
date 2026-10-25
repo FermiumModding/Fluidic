@@ -45,6 +45,10 @@ public final class ClientWaterCache {
     private static final byte[] GONE = new byte[0];
     /** Most ticks an update is held back */
     private static final int MAX_HOLD_TICKS = 10;
+    /** Most ticks an update of puddles is held back, see puddles */
+    private static final int MAX_PUDDLE_HOLD_TICKS = 40;
+    /** Deepest water of a puddle, half a block */
+    static final int PUDDLE_DEPTH = 128;
     private static int dimension = Integer.MIN_VALUE;
     private static int ticks;
 
@@ -57,10 +61,12 @@ public final class ClientWaterCache {
             clear();
             dimension = packetDimension;
         }
-        // Further away than the water is drawn in full, a newer update replaces one held back but keeps its time
-        int hold = holdTicks(key);
+        // Further away than the water is drawn in full, a newer update replaces one held back but keeps its time, unless it
+        // is due sooner, like a pond forming among puddles
+        int hold = holdTicks(key, heights);
         if(hold > 0) {
             if(HELD.put(key, heights == null ? GONE : heights) == null) HELD_UNTIL.put(key, ticks + hold);
+            else HELD_UNTIL.put(key, Math.min(HELD_UNTIL.get(key), ticks + hold));
             return;
         }
         HELD.remove(key);
@@ -71,14 +77,33 @@ public final class ClientWaterCache {
     /**
      * Ticks an update of a section is held back. Small changes of water a few chunks away are hard to see, and every
      * update rebuilds its mesh and the meshes beside it. Held back as a whole, it is shown as if it arrived later, the
-     * water around meets it as it is drawn.
+     * water around meets it as it is drawn. Puddles are held back longer and nearer, see puddles.
      */
-    private static int holdTicks(long key) {
+    private static int holdTicks(long key, byte[] heights) {
         Entity view = Minecraft.getMinecraft().getRenderViewEntity();
         if(view == null) return 0;
         int distance = Math.max(Math.abs((MathHelper.floor(view.posX) >> 4) - Water.keyX(key)), Math.abs((MathHelper.floor(view.posZ) >> 4) - Water.keyZ(key)));
+        int puddle = ForgeConfigHandler.client.puddleDetailDistance;
+        if(distance > puddle && heights != GONE && puddles(heights) && puddles(SECTIONS.get(key))) {
+            return Math.min(MAX_PUDDLE_HOLD_TICKS, (distance - puddle) * 10);
+        }
         int full = ForgeConfigHandler.client.fullDetailDistance;
         return distance <= full ? 0 : Math.min(MAX_HOLD_TICKS, (distance - full) * 2);
+    }
+
+    /**
+     * Whether the water of a section is puddles alone: none of it deeper than half a block or resting on water in it.
+     * Rain keeps puddles changing in small steps all over the ground, each rebuilding its section and the ones beside it.
+     * Ponds hold far fewer cells for the water they show, and their changes are larger.
+     */
+    static boolean puddles(byte[] heights) {
+        if(heights == null) return true;
+        for(int i = 0; i < 4096; i++) {
+            int height = heights[i] & 255;
+            if(height == 0) continue;
+            if(height > PUDDLE_DEPTH || i >= 256 && heights[i - 256] != 0) return false;
+        }
+        return true;
     }
 
     /** Shows the updates held back whose time came, or that came near enough */
@@ -87,8 +112,8 @@ public final class ClientWaterCache {
         for(Iterator<Long2ObjectMap.Entry<byte[]>> it = HELD.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
             Long2ObjectMap.Entry<byte[]> entry = it.next();
             long key = entry.getLongKey();
-            if(ticks < HELD_UNTIL.get(key) && holdTicks(key) > 0) continue;
             byte[] heights = entry.getValue();
+            if(ticks < HELD_UNTIL.get(key) && holdTicks(key, heights) > 0) continue;
             it.remove();
             HELD_UNTIL.remove(key);
             apply(key, heights == GONE ? null : heights);
@@ -164,6 +189,12 @@ public final class ClientWaterCache {
         // Drawn easing there from where it is shown
         WaterMotion.show(key, heights);
         if(old == null && heights == null) return;
+        // Puddles further than they are drawn in full are drawn simply by eighths, see WaterRenderer.buildPuddle. Until an
+        // eighth changes nothing is rebuilt, and nothing beside them: no gaps are kept closed that far away.
+        if(old != null && heights != null && !ChunkWater.isActive() && farPuddles(key) && puddles(old) && puddles(heights)) {
+            if(!sameEighths(old, heights)) WaterRenderer.markDirty(key, 0);
+            return;
+        }
 
         // Work out what changed, so only what depends on it is redrawn
         int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
@@ -188,14 +219,41 @@ public final class ClientWaterCache {
             if(ForgeConfigHandler.client.renderWater && FluidicWater.shapeOf(a) != FluidicWater.shapeOf(b) && nearSettledWater(mc, pos, ox + x, oy + y, oz + z)) {
                 SettledRedraws.add(ox + x, oy + y, oz + z);
             }
-            // The blocks below are lit through it, see ChunkLight. Drawn by the chunks, its redraw reaches them.
+            // The simulated water below is lit through it, see ChunkLight.drawnSky, the chunks draw the blocks around it
+            // with that light. Nothing else is dimmed, the ground under a puddle is not.
             if(!ChunkWater.isActive() && ChunkLight.dimOf(a) != ChunkLight.dimOf(b)) {
-                for(int dy = 0; dy <= ChunkLight.reach(); dy++) SettledRedraws.add(ox + x, oy + y - dy, oz + z);
+                for(int dy = 1; dy <= ChunkLight.reach(); dy++) {
+                    int below = y - dy;
+                    boolean wet = height(ox + x, oy + below, oz + z) > 0 || below >= 0 && old != null && old[i - dy * 256] != 0;
+                    if(!wet) break;
+                    SettledRedraws.add(ox + x, oy + below, oz + z);
+                }
             }
         }
         if(meshChanged) WaterRenderer.markDirty(key, borders);
         // Drawn by the chunks, the changed blocks and those beside them are redrawn
         if(ChunkWater.isActive() && x1 >= 0) ChunkWater.redraw(ox + x0, oy + y0 - ChunkLight.reach(), oz + z0, ox + x1, oy + y1, oz + z1);
+    }
+
+    /** Whether a section is further from the camera than puddles are drawn in full */
+    private static boolean farPuddles(long key) {
+        Entity view = Minecraft.getMinecraft().getRenderViewEntity();
+        if(view == null) return false;
+        int distance = Math.max(Math.abs((MathHelper.floor(view.posX) >> 4) - Water.keyX(key)), Math.abs((MathHelper.floor(view.posZ) >> 4) - Water.keyZ(key)));
+        return distance > ForgeConfigHandler.client.puddleDetailDistance;
+    }
+
+    /** Whether two sections of heights are the same in eighths of a block, as puddles are drawn simply */
+    private static boolean sameEighths(byte[] a, byte[] b) {
+        for(int i = 0; i < 4096; i++) {
+            if(a[i] != b[i] && eighths(a[i] & 255) != eighths(b[i] & 255)) return false;
+        }
+        return true;
+    }
+
+    /** A height 0-255 in eighths of a block, at least one for any water */
+    static int eighths(int height) {
+        return height == 0 ? 0 : Math.max(1, Math.round(height * 8 / 255.0F));
     }
 
     /**
@@ -286,19 +344,20 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position as sent, not eased, see WaterMotion */
     static int sentHeight(int x, int y, int z) {
-        return SECTIONS.height(x, y, z);
+        return SECTIONS.heightOnWriter(x, y, z);
     }
 
     /** Height 0-255 of the water at a block position, client thread only */
     public static int height(int x, int y, int z) {
         // Against water blocks as their chunk was drawn, see ChunkRedraws.view
-        if(ChunkRedraws.viewing()) {
-            int drawn = ChunkRedraws.drawnHeight(x, y, z);
-            if(drawn >= 0) return drawn;
+        ChunkRedraws.Snapshot drawn = ChunkRedraws.clientView();
+        if(drawn != null) {
+            int height = drawn.height(x, y, z);
+            if(height >= 0) return height;
         }
         // A mesh being built from the eased heights, see WaterMotion
         if(WaterMotion.easing) return WaterMotion.height(x, y, z);
-        return SECTIONS.height(x, y, z);
+        return SECTIONS.heightOnWriter(x, y, z);
     }
 
     private static final class Deferred {
@@ -313,13 +372,10 @@ public final class ClientWaterCache {
 
     /** Height 0-255 of the water at a block position, safe from any thread */
     public static int heightAnyThread(int x, int y, int z) {
+        if(WaterMotion.onClientThread()) return height(x, y, z);
         // A chunk redraw reads the heights it began with throughout, see ChunkRedraws.beginRedraw
-        if(ChunkRedraws.viewing() && (ChunkRedraws.redrawing() || WaterMotion.onClientThread())) {
-            int drawn = ChunkRedraws.drawnHeight(x, y, z);
-            if(drawn >= 0) return drawn;
-        }
-        if(WaterMotion.easing && WaterMotion.onClientThread()) return WaterMotion.height(x, y, z);
-        return SECTIONS.height(x, y, z);
+        int drawn = ChunkRedraws.redrawHeight(x, y, z);
+        return drawn >= 0 ? drawn : SECTIONS.height(x, y, z);
     }
 
 }

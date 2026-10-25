@@ -10,6 +10,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
+import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
 
@@ -59,13 +60,39 @@ public final class ChunkRedraws {
     private static final ThreadLocal<Snapshot> REDRAWING = new ThreadLocal<>();
     /** Client thread: the snapshot heights are read from instead of the current ones, see view */
     private static Snapshot viewing;
+    /** A redraw running on the client thread, see clientView */
+    private static Snapshot clientRedrawing;
 
     static {
         WATER_CHANGES.defaultReturnValue(-1L);
         STALE.defaultReturnValue(-1L);
     }
 
+    /** Client thread: sections marked for redrawing now are marked for water alone, see RenderGlobalMixin */
+    private static boolean waterRedraw;
+
     private ChunkRedraws() {}
+
+    /** A chunk section, whether it waits for a redraw only because water in or beside it changed, see RenderGlobalMixin */
+    public interface WaterRedraw {
+        boolean fluidic_waterOnly();
+    }
+
+    /** Sets whether sections marked for redrawing from now on are marked because water changed */
+    public static void setWaterRedraw(boolean water) {
+        waterRedraw = water;
+    }
+
+    public static boolean isWaterRedraw() {
+        return waterRedraw;
+    }
+
+    /** Whether a block change is only water coming, going or changing level, like rain, settling or evaporation */
+    public static boolean waterOnlyChange(IBlockState old, IBlockState state) {
+        boolean oldOpen = FluidicWater.isWater(old) || old.getMaterial() == Material.AIR;
+        boolean open = FluidicWater.isWater(state) || state.getMaterial() == Material.AIR;
+        return oldOpen && open && (FluidicWater.isWater(old) || FluidicWater.isWater(state));
+    }
 
     public static long next() {
         return SEQUENCE.incrementAndGet();
@@ -116,6 +143,7 @@ public final class ChunkRedraws {
     static void caughtUp(LongConsumer sections, LongConsumer redrawn) {
         // A redraw on this thread that failed would leave its heights read here from then on
         REDRAWING.remove();
+        clientRedrawing = null;
         long now = System.nanoTime();
         for(ObjectIterator<Long2LongMap.Entry> it = STALE.long2LongEntrySet().fastIterator(); it.hasNext(); ) {
             Long2LongMap.Entry entry = it.next();
@@ -193,7 +221,15 @@ public final class ChunkRedraws {
         Snapshot old = DRAWN_SNAPSHOTS.put(key, snapshot);
         // Water blocks it still draws are further from simulated water than its shape depends on, see TAKE_REACH, the
         // simulated water around only switches with it where it left other water blocks to WaterRenderer
-        if(old == null || !Arrays.equals(old.taken, snapshot.taken)) WaterRenderer.chunkRedrawn(key);
+        if(old != null && Arrays.equals(old.taken, snapshot.taken)) return;
+        // The sections beside it only meet the water blocks that switched where they are near their border
+        int borders = 1 << 13;
+        boolean[] takenBefore = old == null ? null : old.taken, takenAfter = snapshot.taken;
+        for(int i = 0; i < 4096; i++) {
+            boolean was = takenBefore != null && takenBefore[i], is = takenAfter != null && takenAfter[i];
+            if(was != is) borders |= WaterMotion.nearBorders(i & 15, i >> 8, (i >> 4) & 15);
+        }
+        WaterRenderer.chunkRedrawn(key, borders);
     }
 
     /**
@@ -260,11 +296,13 @@ public final class ChunkRedraws {
         }
         Snapshot snapshot = new Snapshot(key, heights, taken);
         REDRAWING.set(snapshot);
+        if(WaterMotion.onClientThread()) clientRedrawing = snapshot;
         return snapshot;
     }
 
     public static void endRedraw() {
         REDRAWING.remove();
+        if(WaterMotion.onClientThread()) clientRedrawing = null;
     }
 
     /** Whether the redraw on this thread leaves the water block at a position in its section to WaterRenderer */
@@ -284,6 +322,13 @@ public final class ChunkRedraws {
     static boolean anyTaken(long key) {
         Snapshot snapshot = DRAWN_SNAPSHOTS.get(key);
         return snapshot != null && snapshot.taken != null;
+    }
+
+    /** The cells of the section on screen whose water blocks WaterRenderer draws, null for none, by cell index */
+    @Nullable
+    static boolean[] takenCells(long key) {
+        Snapshot snapshot = DRAWN_SNAPSHOTS.get(key);
+        return snapshot == null ? null : snapshot.taken;
     }
 
     /**
@@ -306,20 +351,19 @@ public final class ChunkRedraws {
         return viewing != null;
     }
 
-    /** Whether heights are read as a redraw or a view of one sees them, see {@link #drawnHeight} */
-    static boolean viewing() {
-        return viewing != null || REDRAWING.get() != null;
+    /**
+     * The snapshot heights on the client thread are read from: a chunk redraw running on it, vanilla redraws some on the
+     * client thread, or a view, see view. Null for the heights now.
+     */
+    @Nullable
+    static Snapshot clientView() {
+        Snapshot snapshot = clientRedrawing;
+        return snapshot != null ? snapshot : viewing;
     }
 
-    /** Whether a chunk redraw runs on this thread */
-    static boolean redrawing() {
-        return REDRAWING.get() != null;
-    }
-
-    /** Height 0-255 at a position as the redraw running on this thread or the section viewed sees it, -1 if not known */
-    static int drawnHeight(int x, int y, int z) {
+    /** Height 0-255 at a position as the redraw running on this thread sees it, -1 if none runs or it does not reach */
+    static int redrawHeight(int x, int y, int z) {
         Snapshot snapshot = REDRAWING.get();
-        if(snapshot == null) snapshot = viewing;
         return snapshot == null ? -1 : snapshot.height(x, y, z);
     }
 

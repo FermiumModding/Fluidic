@@ -58,10 +58,16 @@ public final class SettledRedraws {
             PENDING.clear();
             return;
         }
-        for(int n = 0; n < SECTIONS_PER_TICK && !PENDING.isEmpty(); n++) {
-            int[] area = PENDING.removeFirst();
-            // The settled blocks beside the changed ones are what needs redrawing
-            world.markBlockRangeForRenderUpdate(area[0] - 1, area[1] - 1, area[2] - 1, area[3] + 1, area[4] + 1, area[5] + 1);
+        ChunkRedraws.setWaterRedraw(true);
+        try {
+            for(int n = 0; n < SECTIONS_PER_TICK && !PENDING.isEmpty(); n++) {
+                int[] area = PENDING.removeFirst();
+                // The settled blocks beside the changed ones are what needs redrawing
+                world.markBlockRangeForRenderUpdate(area[0] - 1, area[1] - 1, area[2] - 1, area[3] + 1, area[4] + 1, area[5] + 1);
+            }
+        }
+        finally {
+            ChunkRedraws.setWaterRedraw(false);
         }
     }
 

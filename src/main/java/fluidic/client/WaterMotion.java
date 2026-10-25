@@ -27,6 +27,11 @@ final class WaterMotion {
     private static final byte[] NO_WATER = new byte[4096];
     /** Least change of a cell that is eased, 1/32 of a block. Less is shown at once, see show. */
     private static final int MIN_EASED = 8;
+    /** Most cells an update of raindrops raises, and by how much at most, an eighth of a block and a little, see show */
+    private static final int MAX_DROPS = 2;
+    private static final int MAX_DROP = 40;
+    /** Shortest time between two frames the water easing is rebuilt for, 50 a second, see WaterRenderer */
+    static final long MIN_EASE_FRAME_NANOS = 20_000_000L;
 
     private static final Long2ObjectOpenHashMap<Motion> SECTIONS = new Long2ObjectOpenHashMap<>();
     /** Sections easing toward new heights, WaterRenderer rebuilds them and the sections around them every frame */
@@ -102,15 +107,22 @@ final class WaterMotion {
         }
         // Too little moves to see, like rain landing on a pool, it is shown at once. Eased, the section and the ones around it
         // would be rebuilt every frame for nothing.
-        int most = 0, borders = 0;
+        int most = 0, borders = 0, eased = 0;
+        boolean drops = true;
         for(int i = 0; i < 4096; i++) {
-            int change = Math.abs((to[i] & 255) - (from[i] & 255));
+            int change = (to[i] & 255) - (from[i] & 255);
             if(change == 0) continue;
-            most = Math.max(most, change);
+            most = Math.max(most, Math.abs(change));
             borders |= nearBorders(i & 15, i >> 8, (i >> 4) & 15);
+            if(Math.abs(change) < MIN_EASED) continue;
+            eased++;
+            drops &= change > 0 && change <= MAX_DROP;
         }
         motion.to = to;
-        if(most < MIN_EASED) {
+        // Raindrops landing are shown at once too: a cell or two rising by about an eighth, the rest hardly changing.
+        // Near the camera in a storm they land in nearly every update, eased each would keep the water around rebuilding
+        // every frame. Water flowing or evening out changes many cells together.
+        if(most < MIN_EASED || drops && eased <= MAX_DROPS) {
             motion.from = null;
             MOVING.remove(key);
             return;
@@ -137,7 +149,7 @@ final class WaterMotion {
      * WaterRenderer.markDirty. The corners and faces along a border look one cell into the section beside it, and the
      * cell beside that tells whether it is a trace or a thin layer.
      */
-    private static int nearBorders(int x, int y, int z) {
+    static int nearBorders(int x, int y, int z) {
         int bits = 0;
         for(int dx = x <= 1 ? -1 : 0; dx <= (x >= 14 ? 1 : 0); dx++) {
             for(int dy = y <= 1 ? -1 : 0; dy <= (y >= 14 ? 1 : 0); dy++) {
@@ -254,6 +266,11 @@ final class WaterMotion {
             }
         }
         return sections;
+    }
+
+    /** Whether any section is easing */
+    static boolean anyMoving() {
+        return !MOVING.isEmpty();
     }
 
     /** Whether lookups now are on the client thread, chunk render threads always read the heights sent */

@@ -29,6 +29,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.world.biome.BiomeColorHelper;
 import net.minecraft.util.math.BlockPos;
@@ -42,6 +43,8 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.relauncher.Side;
 import org.lwjgl.opengl.GL11;
 
+import javax.annotation.Nullable;
+
 /**
  * Renders water that is still being simulated. Each section with water is compiled into a display list
  * when the server sends new heights, so drawing a frame is one call per section.
@@ -54,6 +57,26 @@ public final class WaterRenderer {
     private static final LongLinkedOpenHashSet URGENT = new LongLinkedOpenHashSet();
     /** Sections around chunk sections that just came on screen, rebuilt in full this frame, see chunkRedrawn */
     private static final LongLinkedOpenHashSet SYNC = new LongLinkedOpenHashSet();
+    /** Sections drawn as puddles further than they are drawn in full, see buildPuddle, rebuilt in full once near */
+    private static final LongOpenHashSet SIMPLE = new LongOpenHashSet();
+    /** When water easing was last rebuilt, see onRenderWorldLast */
+    private static long lastEaseFrame;
+    /** The view of the frame being drawn, see seen */
+    private static Frustum viewFrustum;
+    private static double viewX, viewZ;
+    private static int viewDistance;
+    /**
+     * Chunk sections vanilla found in view this frame, see RenderGlobalMixin: its cave culling leaves out those behind
+     * walls and the ground. Null when it did not say this frame, OptiFine or Celeritas may draw the chunks instead.
+     */
+    private static final LongOpenHashSet SECTIONS_IN_VIEW = new LongOpenHashSet();
+    private static boolean sectionsInViewFresh;
+    private static LongOpenHashSet sectionsInView;
+    /**
+     * How far outside the view sections are rebuilt anyway, in blocks. Turning, the sections coming into view were mostly
+     * built already, the rest are a frame or two behind.
+     */
+    private static final int VIEW_MARGIN = 8;
     private static final BufferBuilder BUFFER = new BufferBuilder(1 << 16);
     private static final WorldVertexBufferUploader UPLOADER = new WorldVertexBufferUploader();
     private static final BlockPos.MutableBlockPos POS = new BlockPos.MutableBlockPos();
@@ -149,28 +172,28 @@ public final class WaterRenderer {
      * A chunk section drawn with new simulated heights is on screen, see ChunkRedraws.drawn. Simulated water around it
      * meets its water blocks as they are drawn now, rebuilt in this same frame.
      */
-    static void chunkRedrawn(long key) {
+    static void chunkRedrawn(long key, int borders) {
         if(ChunkWater.isActive() || !ForgeConfigHandler.client.renderWater) return;
         Minecraft mc = Minecraft.getMinecraft();
         if(!mc.isCallingFromMinecraftThread()) {
-            mc.addScheduledTask(() -> chunkRedrawn(key));
+            mc.addScheduledTask(() -> chunkRedrawn(key, borders));
             return;
         }
         int sx = Water.keyX(key), sy = Water.keyY(key), sz = Water.keyZ(key);
-        for(int dx = -1; dx <= 1; dx++) {
-            for(int dy = -1; dy <= 1; dy++) {
-                for(int dz = -1; dz <= 1; dz++) {
-                    if(sy + dy < 0 || sy + dy > 15) continue;
-                    long section = Water.sectionKey(sx + dx, sy + dy, sz + dz);
-                    if(ClientWaterCache.hasSection(section) || DISPLAY_LISTS.containsKey(section) || ChunkRedraws.anyTaken(section)) SYNC.add(section);
-                }
-            }
+        // The section and the ones beside it its switched water blocks are near, as bits by offset, see markDirty
+        for(int bit = 0; bit < 27; bit++) {
+            if((borders & (1 << bit)) == 0) continue;
+            int ny = sy + bit / 3 % 3 - 1;
+            if(ny < 0 || ny > 15) continue;
+            long section = Water.sectionKey(sx + bit / 9 - 1, ny, sz + bit % 3 - 1);
+            if(ClientWaterCache.hasSection(section) || DISPLAY_LISTS.containsKey(section) || ChunkRedraws.anyTaken(section)) SYNC.add(section);
         }
     }
 
     /** The client dropped a section, nothing waits for it to be drawn again */
     static void unloadSection(long key) {
         FILM_WAITS.remove(key);
+        SIMPLE.remove(key);
         WaterMotion.unload(key);
         // Water blocks it drew for the chunks are gone with it
         int list = DISPLAY_LISTS.remove(key);
@@ -181,6 +204,7 @@ public final class WaterRenderer {
     static void clear() {
         for(int list : DISPLAY_LISTS.values()) GLAllocation.deleteDisplayLists(list);
         DISPLAY_LISTS.clear();
+        SIMPLE.clear();
         SYNC.clear();
         WaterMotion.clear();
         FILM_WAITS.clear();
@@ -200,9 +224,43 @@ public final class WaterRenderer {
         // Sides run down like vanilla's water, which draws them with the flowing texture
         flow = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_flow");
         overlay = mc.getTextureMapBlocks().getAtlasSprite("minecraft:blocks/water_overlay");
-        WaterMotion.frame();
+        // Water easing is rebuilt at most 50 times a second, see WaterMotion.MIN_EASE_FRAME_NANOS. Between those frames the
+        // eased heights stay where its meshes were built, everything else built meets them there.
+        long frameTime = System.nanoTime();
+        boolean easeFrame = !WaterMotion.anyMoving() || frameTime - lastEaseFrame >= WaterMotion.MIN_EASE_FRAME_NANOS;
+        if(easeFrame) {
+            lastEaseFrame = frameTime;
+            WaterMotion.frame();
+        }
+        float partialTicks = event.getPartialTicks();
+        double camX = view.lastTickPosX + (view.posX - view.lastTickPosX) * partialTicks;
+        double camY = view.lastTickPosY + (view.posY - view.lastTickPosY) * partialTicks;
+        double camZ = view.lastTickPosZ + (view.posZ - view.lastTickPosZ) * partialTicks;
+        int distance = Math.min(ForgeConfigHandler.client.renderDistance, mc.gameSettings.renderDistanceChunks) * 16 + 8;
+        double maxDistanceSq = (double)distance * distance;
+        // Sections out of view are skipped, the view is the one the chunks were just drawn with
+        Frustum frustum = new Frustum();
+        frustum.setPosition(camX, camY, camZ);
+        viewFrustum = frustum;
+        viewX = camX;
+        viewZ = camZ;
+        viewDistance = distance;
+        sectionsInView = sectionsInViewFresh ? SECTIONS_IN_VIEW : null;
+        sectionsInViewFresh = false;
+        // Sections out of view wait to be rebuilt until they come into view, they are not drawn until then
+        deferUnseen(SYNC);
+        deferUnseen(URGENT);
         // Rebuilds are capped by count and by time, so busy weather lags the water behind instead of the frame rate
         int budget = ForgeConfigHandler.client.meshRebuildsPerFrame;
+        // Puddles drawn simply that came near enough to be drawn in full
+        if(!SIMPLE.isEmpty()) {
+            for(LongIterator it = SIMPLE.iterator(); it.hasNext(); ) {
+                long key = it.nextLong();
+                if(beyond(key, ForgeConfigHandler.client.puddleDetailDistance)) continue;
+                it.remove();
+                DIRTY.add(key);
+            }
+        }
         // Chunks drawn with water blocks that came or went this frame, their simulated water switches with them
         ChunkRedraws.caughtUp(WaterRenderer::markUrgent, WaterRenderer::filmsCaughtUp);
         // Chunk sections that came on screen with water blocks left to this renderer or taken back, all of them, the
@@ -215,7 +273,7 @@ public final class WaterRenderer {
         }
         // Water easing to new heights, built from the heights eased to this frame, with the sections around it whose
         // corners it shares, all of them in this same frame, see WaterMotion
-        LongOpenHashSet moving = WaterMotion.moving();
+        LongOpenHashSet moving = easeFrame ? WaterMotion.moving() : new LongOpenHashSet();
         // Sections beside them waiting for a rebuild with heights they already read, the shared edges would not meet
         LongArrayList waiting = new LongArrayList();
         for(long key : moving) {
@@ -232,30 +290,38 @@ public final class WaterRenderer {
         moving.addAll(waiting);
         for(long key : moving) {
             if(!ClientWaterCache.hasSection(key) && !DISPLAY_LISTS.containsKey(key) && !ChunkRedraws.anyTaken(key)) continue;
-            DIRTY.remove(key);
             URGENT.remove(key);
+            // Built where it eased to once it comes into view
+            if(!seen(key)) {
+                DIRTY.add(key);
+                continue;
+            }
+            DIRTY.remove(key);
             rebuild(world, key);
         }
         // Sections beside changed blocks go first and past the count, vanilla may draw the change in this same frame
+        // The rest waits for the next frame water easing is rebuilt in, the eased water around reads their new heights then
         long urgentDeadline = System.nanoTime() + URGENT_NANOS;
-        while(!URGENT.isEmpty() && System.nanoTime() < urgentDeadline) {
+        while(!URGENT.isEmpty() && easeFrame && System.nanoTime() < urgentDeadline) {
             long key = URGENT.removeFirstLong();
             DIRTY.remove(key);
             rebuildGroup(world, key, MAX_GROUP, urgentDeadline);
         }
         long deadline = System.nanoTime() + REBUILD_NANOS;
-        while(!DIRTY.isEmpty() && budget > 0 && System.nanoTime() < deadline) budget -= rebuildGroup(world, DIRTY.removeFirstLong(), Math.min(budget, MAX_GROUP), deadline);
+        if(easeFrame && !DIRTY.isEmpty()) {
+            // Those in view, in the order they were marked
+            LongArrayList seen = new LongArrayList();
+            for(LongIterator it = DIRTY.iterator(); it.hasNext(); ) {
+                long key = it.nextLong();
+                if(seen(key)) seen.add(key);
+            }
+            for(int n = 0; n < seen.size() && budget > 0 && System.nanoTime() < deadline; n++) {
+                long key = seen.getLong(n);
+                // Rebuilt already with a group before it
+                if(DIRTY.remove(key)) budget -= rebuildGroup(world, key, Math.min(budget, MAX_GROUP), deadline);
+            }
+        }
         if(DISPLAY_LISTS.isEmpty()) return;
-
-        float partialTicks = event.getPartialTicks();
-        double camX = view.lastTickPosX + (view.posX - view.lastTickPosX) * partialTicks;
-        double camY = view.lastTickPosY + (view.posY - view.lastTickPosY) * partialTicks;
-        double camZ = view.lastTickPosZ + (view.posZ - view.lastTickPosZ) * partialTicks;
-        int distance = Math.min(ForgeConfigHandler.client.renderDistance, mc.gameSettings.renderDistanceChunks) * 16 + 8;
-        double maxDistanceSq = (double)distance * distance;
-        // Sections out of view are skipped, the view is the one the chunks were just drawn with
-        Frustum frustum = new Frustum();
-        frustum.setPosition(camX, camY, camZ);
 
         GlStateManager.pushMatrix();
         // Vanilla turns fog off before this event, without it distant water would not fade out like the chunks around it.
@@ -286,6 +352,7 @@ public final class WaterRenderer {
             if(dx * dx + dz * dz > maxDistanceSq) continue;
             int bx = Water.keyX(key) * 16, by = Water.keyY(key) * 16, bz = Water.keyZ(key) * 16;
             if(!frustum.isBoxInFrustum(bx, by, bz, bx + 16, by + 16, bz + 16)) continue;
+            if(sectionsInView != null && !sectionsInView.contains(key)) continue;
             GlStateManager.pushMatrix();
             GlStateManager.translate(ox, oy, oz);
             GlStateManager.callList(entry.getIntValue());
@@ -350,6 +417,8 @@ public final class WaterRenderer {
                     for(int dz = -1; dz <= 1; dz++) {
                         if(sy + dy < 0 || sy + dy > 15) continue;
                         long neighbor = Water.sectionKey(sx + dx, sy + dy, sz + dz);
+                        // Out of view it is not drawn against this one, it waits, see deferUnseen
+                        if(!seen(neighbor)) continue;
                         if(DIRTY.remove(neighbor) | URGENT.remove(neighbor) | SYNC.remove(neighbor)) group.add(neighbor);
                     }
                 }
@@ -364,8 +433,11 @@ public final class WaterRenderer {
         // As eased this frame, see WaterMotion
         byte[] heights = WaterMotion.section(key);
         // Water blocks the chunk on screen left to this renderer, see ChunkRedraws.Snapshot
-        boolean taken = ChunkRedraws.anyTaken(key);
+        boolean[] takenCells = ChunkRedraws.takenCells(key);
+        boolean taken = takenCells != null;
         if(heights == null && taken) heights = NO_WATER;
+        // Puddles further than they are drawn in full, drawn simply, see buildPuddle
+        boolean simple = heights != null && !taken && ClientWaterCache.puddles(heights) && beyond(key, ForgeConfigHandler.client.puddleDetailDistance);
         boolean any = false;
         if(heights != null) {
             int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
@@ -380,8 +452,8 @@ public final class WaterRenderer {
             try {
                 for(int i = 0; i < 4096; i++) {
                     int lx = i & 15, ly = i >> 8, lz = (i >> 4) & 15;
-                    if(heights[i] == 0 && !(taken && ChunkRedraws.taken(ox + lx, oy + ly, oz + lz) && FluidicWater.isWater(shown(blocks, ox + lx, oy + ly, oz + lz)))) continue;
-                    any |= buildCell(blocks, ox, oy, oz, lx, ly, lz);
+                    if(heights[i] == 0 && !(taken && takenCells[i] && FluidicWater.isWater(shown(blocks, ox + lx, oy + ly, oz + lz)))) continue;
+                    any |= simple ? buildPuddle(blocks, ox, oy, oz, lx, ly, lz) : buildCell(blocks, ox, oy, oz, lx, ly, lz);
                 }
             }
             catch(RuntimeException ex) {
@@ -398,6 +470,8 @@ public final class WaterRenderer {
             }
         }
 
+        if(simple && any) SIMPLE.add(key);
+        else SIMPLE.remove(key);
         int list = DISPLAY_LISTS.get(key);
         if(!any) {
             BUFFER.reset();
@@ -414,6 +488,117 @@ public final class WaterRenderer {
         GlStateManager.glNewList(list, GL11.GL_COMPILE);
         UPLOADER.draw(BUFFER);
         GlStateManager.glEndList();
+    }
+
+    /**
+     * Whether a section is in view this frame or close to it, see VIEW_MARGIN. Sections out of view are not drawn, they
+     * wait to be rebuilt until they come into view, and a storm behind the camera costs nothing.
+     */
+    private static boolean seen(long key) {
+        if(viewFrustum == null) return true;
+        double dx = Water.keyX(key) * 16 + 8 - viewX, dz = Water.keyZ(key) * 16 + 8 - viewZ;
+        double reach = viewDistance + VIEW_MARGIN;
+        if(dx * dx + dz * dz > reach * reach) return false;
+        int bx = Water.keyX(key) * 16, by = Water.keyY(key) * 16, bz = Water.keyZ(key) * 16;
+        if(!viewFrustum.isBoxInFrustum(bx - VIEW_MARGIN, by - VIEW_MARGIN, bz - VIEW_MARGIN, bx + 16 + VIEW_MARGIN, by + 16 + VIEW_MARGIN, bz + 16 + VIEW_MARGIN)) return false;
+        // Hidden behind walls or the ground. Along the edges of the view it is built ahead of turning anyway.
+        if(sectionsInView == null || !viewFrustum.isBoxInFrustum(bx, by, bz, bx + 16, by + 16, bz + 16)) return true;
+        return sectionsInView.contains(key);
+    }
+
+    /**
+     * Vanilla works out the chunk sections in view, returns the set to fill with them, null when nothing here needs them,
+     * see RenderGlobalMixin
+     */
+    @Nullable
+    public static LongOpenHashSet beginSectionsInView() {
+        if(!ForgeConfigHandler.client.renderWater || ChunkWater.isActive()) return null;
+        if(DISPLAY_LISTS.isEmpty() && DIRTY.isEmpty() && URGENT.isEmpty() && SYNC.isEmpty() && !WaterMotion.anyMoving()) return null;
+        SECTIONS_IN_VIEW.clear();
+        sectionsInViewFresh = true;
+        return SECTIONS_IN_VIEW;
+    }
+
+    /** Moves the sections of a set out of view to DIRTY, rebuilt once in view */
+    private static void deferUnseen(LongLinkedOpenHashSet sections) {
+        for(LongIterator it = sections.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            if(seen(key)) continue;
+            it.remove();
+            DIRTY.add(key);
+        }
+    }
+
+    /** Whether a section is further from the camera than a distance in chunks */
+    private static boolean beyond(long key, int distance) {
+        Entity view = Minecraft.getMinecraft().getRenderViewEntity();
+        if(view == null) return false;
+        int cx = MathHelper.floor(view.posX) >> 4, cz = MathHelper.floor(view.posZ) >> 4;
+        return Math.max(Math.abs(Water.keyX(key) - cx), Math.abs(Water.keyZ(key) - cz)) > distance;
+    }
+
+    /**
+     * A cell of a section of puddles further than they are drawn in full, see ClientWaterCache.puddles. Rain keeps puddles
+     * changing all over the ground, and buildCell works out corners shared with the water around, looking up hundreds of
+     * blocks and heights for every cell. Here the cell is flat at its own height, with faces down to lower or dry water
+     * beside it, so it closes up against the puddles around without sharing corners. Where it meets water drawn in full a
+     * small step may show, hard to see that far away.
+     */
+    private static boolean buildPuddle(SectionBlocks world, int ox, int oy, int oz, int lx, int ly, int lz) {
+        int x = ox + lx, y = oy + ly, z = oz + lz;
+        // Drawn by the chunk as a water block
+        if(FluidicWater.isWater(shown(world, x, y, z))) return false;
+        float top = puddleHeight(world, x, y, z);
+        if(top <= 0.0F) return false;
+        int light = world.light(x, y, z), above = world.light(x, y + 1, z);
+        int sky = Math.max(light >> 20 & 15, above >> 20 & 15) << 4, block = light & 65535;
+        int column16 = lx * 16 + lz;
+        if(colorGeneration[column16] != generation) {
+            colorGeneration[column16] = generation;
+            colors[column16] = BiomeColorHelper.getWaterColorAtPos(world, POS.setPos(x, y, z));
+        }
+        int color = colors[column16];
+        red = color >> 16 & 255;
+        green = color >> 8 & 255;
+        blue = color & 255;
+        float u0 = still.getMinU(), u1 = still.getMaxU(), v0 = still.getMinV(), v1 = still.getMaxV();
+        vertex(lx, ly + top, lz, u0, v0, sky, block);
+        vertex(lx, ly + top, lz + 1, u0, v1, sky, block);
+        vertex(lx + 1, ly + top, lz + 1, u1, v1, sky, block);
+        vertex(lx + 1, ly + top, lz, u1, v0, sky, block);
+        puddleSide(world, x, y, z - 1, lx, ly, lz, lx + 1, lz, top, EnumFacing.NORTH);
+        puddleSide(world, x, y, z + 1, lx + 1, ly, lz + 1, lx, lz + 1, top, EnumFacing.SOUTH);
+        puddleSide(world, x - 1, y, z, lx, ly, lz + 1, lx, lz, top, EnumFacing.WEST);
+        puddleSide(world, x + 1, y, z, lx + 1, ly, lz, lx + 1, lz + 1, top, EnumFacing.EAST);
+        return true;
+    }
+
+    /** Surface of a puddle cell drawn simply, see buildPuddle, 0 for no water drawn there */
+    private static float puddleHeight(SectionBlocks world, int x, int y, int z) {
+        if(isLiquid(world, x, y, z)) return liquidHeight(world, x, y, z) - SURFACE_DROP;
+        // By eighths, smaller changes do not rebuild it, see ClientWaterCache.show
+        int height = ClientWaterCache.eighths(ClientWaterCache.height(x, y, z));
+        return height == 0 ? 0.0F : height / 8.0F * FULL_HEIGHT - SURFACE_DROP;
+    }
+
+    /** The face of a puddle drawn simply down to the water beside it, or the ground beside it, where that is lower */
+    private static void puddleSide(SectionBlocks world, int nx, int y, int nz, float x0, int ly, float z0, float x1, float z1, float top, EnumFacing toward) {
+        if(isSolid(world, nx, y, nz) || isOpaque(world, nx, y, nz)) return;
+        float bottom = Math.max(0.0F, puddleHeight(world, nx, y, nz));
+        if(bottom >= top) return;
+        int light = world.light(nx, y, nz);
+        int sky = (light >> 20 & 15) << 4, block = light & 65535;
+        float shade = toward.getAxis() == EnumFacing.Axis.Z ? 0.8F : 0.6F;
+        float u0 = flow.getMinU(), u1 = flow.getInterpolatedU(8.0D);
+        float vTop = flow.getInterpolatedV((1.0F - top) * 8.0F), vBottom = flow.getInterpolatedV((1.0F - bottom) * 8.0F);
+        vertex(x0, ly + bottom, z0, u0, vBottom, sky, block, shade);
+        vertex(x0, ly + top, z0, u0, vTop, sky, block, shade);
+        vertex(x1, ly + top, z1, u1, vTop, sky, block, shade);
+        vertex(x1, ly + bottom, z1, u1, vBottom, sky, block, shade);
+        vertex(x0, ly + bottom, z0, u0, vBottom, sky, block, shade);
+        vertex(x1, ly + bottom, z1, u1, vBottom, sky, block, shade);
+        vertex(x1, ly + top, z1, u1, vTop, sky, block, shade);
+        vertex(x0, ly + top, z0, u0, vTop, sky, block, shade);
     }
 
     /** Adds the visible faces of one water cell in section local coordinates, returns whether any were added */
@@ -592,6 +777,7 @@ public final class WaterRenderer {
         float neighbor = surface(world, nx, y, nz);
         if(neighbor >= 0.0F && (!column || neighbor >= 1.0F)) return false;
         float bottom0, bottom1;
+        boolean ledge = false;
         if(neighbor >= 0.0F) {
             // The neighbour's surface slopes along the shared edge, the face follows it so no wedge stays open
             bottom0 = Math.max(-SURFACE_DROP, edge0);
@@ -610,6 +796,7 @@ public final class WaterRenderer {
                     int ox = Water.keyX(building) * 16, oz = Water.keyZ(building) * 16;
                     bottom0 = Math.min(bottom, corner(world, ox + Math.round(x0), y - 1, oz + Math.round(z0), below, under) - SURFACE_DROP - 1.0F);
                     bottom1 = Math.min(bottom, corner(world, ox + Math.round(x1), y - 1, oz + Math.round(z1), below, under) - SURFACE_DROP - 1.0F);
+                    ledge = true;
                 }
             }
             // The edge of a thin layer onto the pool beside it, which is drawn just under the top of its block
@@ -618,6 +805,15 @@ public final class WaterRenderer {
             }
         }
         if(top0 <= bottom0 && top1 <= bottom1) return false;
+        // Reaching down over a ledge it runs along the face of the block under this cell, in the same plane. Set out from
+        // it like faces against blocks are set in, or the two would flicker.
+        int fx = toward.getXOffset(), fz = toward.getZOffset();
+        if(ledge && inset(world, nx - fx, y - 1, nz - fz) > 0.0F) {
+            x0 += fx * INSET;
+            x1 += fx * INSET;
+            z0 += fz * INSET;
+            z1 += fz * INSET;
+        }
         // Against a solid face like glass the plain overlay texture, like vanilla's water sides
         POS.setPos(nx, y, nz);
         TextureAtlasSprite sprite = world.getBlockState(POS).getBlockFaceShape(world, POS, toward.getOpposite()) == BlockFaceShape.SOLID ? overlay : flow;

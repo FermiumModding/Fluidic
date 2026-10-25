@@ -58,6 +58,21 @@ public class ForgeConfigHandler {
 		@Config.RangeInt(min = 1, max = 1200)
 		public int settleSteps = 40;
 
+		@Config.Comment({
+				"Simulation steps puddles have to stay still before they settle into real blocks: sections whose water is no",
+				"deeper than half a block and rests on no water. Puddles mostly evaporate, soak away or run into ponds, settled",
+				"each change would redraw their chunk. Simulated water evaporates and soaks away too."})
+		@Config.Name("Puddle Settle Steps")
+		@Config.RangeInt(min = 1, max = 72000)
+		public int puddleSettleSteps = 600;
+
+		@Config.Comment({
+				"Puddle Settle Steps while it rains, rain landing on settled puddles changes their blocks with every drop.",
+				"0 keeps puddles simulated until the rain stops."})
+		@Config.Name("Storm Puddle Settle Steps")
+		@Config.RangeInt(min = 0, max = 72000)
+		public int stormPuddleSettleSteps = 0;
+
 		@Config.Comment("Simulation steps between water updates sent to clients.")
 		@Config.Name("Network Interval")
 		@Config.RangeInt(min = 1, max = 20)
@@ -274,6 +289,14 @@ public class ForgeConfigHandler {
 		@Config.Name("Full Detail Distance")
 		@Config.RangeInt(min = 0, max = 32)
 		public int fullDetailDistance = 2;
+
+		@Config.Comment({
+				"Chunks from the camera puddles are drawn in full detail. Further out, sections holding only shallow water resting",
+				"on the ground, as rain leaves it, show their updates less often, up to two seconds apart. Rain keeps puddles",
+				"changing all over the ground, rebuilding their water every time."})
+		@Config.Name("Puddle Detail Distance")
+		@Config.RangeInt(min = 0, max = 32)
+		public int puddleDetailDistance = 1;
 
 		@Config.Comment({
 				"Draws simulated water as part of the chunks it is in, as water blocks, instead of separately. Shader packs",

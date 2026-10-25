@@ -42,7 +42,12 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   `minecraft:flowing_water`), so vanilla and other mods treat it as plain water. It never flows on its own.
   Water blocks hold eighths of a block in vanilla's levels: level 0 is full, 1 to 7 hold 7/8 down to 1/8.
 * **Settling**. A section that stays quiet for `Settle Steps` steps becomes water blocks and leaves the
-  simulation, so a resting lake costs nothing. When a neighbour changes, or simulated water arrives at a
+  simulation, so a resting lake costs nothing. Puddles, sections whose water is no deeper than half a block
+  and rests on no water, wait `Puddle Settle Steps` instead: they mostly evaporate, soak away or run into
+  ponds, and settled each change would redraw their chunk. While it rains they wait `Storm Puddle Settle
+  Steps`, by default until the rain stops, since every drop landing on a settled puddle changes its blocks.
+  Puddles waiting are checked again every 100 steps, spread out so a storm ending does not settle them all
+  at once. When a neighbour changes, or simulated water arrives at a
   different level, the simulation wakes them back up. Water placed by anything else, like a bucket, starts
   flowing the same way. Water placed while a chunk is generated, like lakes and springs, stays as generated
   (`ChunkMixin`) until something disturbs it or a random tick near a player finds it out of balance.
@@ -71,7 +76,11 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   time between updates, and is rebuilt from the eased heights every frame with the sections around it, so every frame is
   a whole surface. The water is shown up to one update behind (`Smooth Water Motion` in the client config). Further
   than `Full Detail Distance` (2 chunks by default) updates of a section are held back and shown less often, up to half a
-  second apart, as if they arrived later, so the water around still meets them, and saves rebuilding the water there. Water blocks
+  second apart, as if they arrived later, so the water around still meets them, and saves rebuilding the water there.
+  Sections holding only puddles, no water deeper than half a block or resting on water, are held back from
+  `Puddle Detail Distance` (1 chunk) on, up to two seconds apart: rain keeps them changing all over the ground. There
+  they are also drawn simply, each block flat at its own height with sides down to the water beside it, instead of with
+  corners shared with the water around, which costs far less to build. Water blocks
   within two blocks of simulated water are left to this renderer by the chunks, so the two never meet where water moves
   (`ChunkRedraws`). Shader packs only shade what the chunks draw, so while an
   shader pack is in use, and always with Celeritas or its forks like Voxtavium, whose own chunk lighting separately drawn water

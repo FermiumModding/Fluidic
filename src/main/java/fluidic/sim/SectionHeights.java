@@ -14,6 +14,10 @@ public final class SectionHeights {
     /** Changed after every write, a cached section of an older version is looked up again */
     private volatile int version;
     private final ThreadLocal<Lookup> lookup = ThreadLocal.withInitial(Lookup::new);
+    /** The writing thread's last section looked up, see heightOnWriter */
+    private long writerKey = Long.MIN_VALUE;
+    private int writerVersion = -1;
+    private byte[] writerSection;
 
     public byte[] get(long key) {
         Lookup last = lookup.get();
@@ -31,6 +35,21 @@ public final class SectionHeights {
         if(y < 0 || y > 255) return 0;
         byte[] section = get(Water.sectionKey(x >> 4, y >> 4, z >> 4));
         return section == null ? 0 : section[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
+    }
+
+    /**
+     * Height 0-255 at a block position, only from the writing thread. Its own last section is kept in plain fields, a mesh
+     * build looks up heights by the thousand and the per thread lookup costs more than the rest of it.
+     */
+    public int heightOnWriter(int x, int y, int z) {
+        if(y < 0 || y > 255) return 0;
+        long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
+        if(key != writerKey || writerVersion != version) {
+            writerKey = key;
+            writerVersion = version;
+            writerSection = sections.get(key);
+        }
+        return writerSection == null ? 0 : writerSection[Water.cellIndex(x & 15, y & 15, z & 15)] & 255;
     }
 
     /** Only from the writing thread */

@@ -83,6 +83,8 @@ public final class WaterSimulation {
     private static final int EVAPORATE_STEPS = 200;
     /** Steps between adding rain held back from water that keeps moving */
     private static final int RAIN_RELEASE_STEPS = 200;
+    /** Steps between checks whether puddles waiting to settle still are puddles, see settlesNow */
+    private static final int PUDDLE_CHECK_STEPS = 100;
     /** Largest pool surface levelled in one go, bounds the cost of settling a section of a huge lake */
     private static final int MAX_POOL = 16384;
     /**
@@ -820,7 +822,7 @@ public final class WaterSimulation {
                 }
                 else {
                     if(section.quietSteps == 0) section.startQuiet();
-                    if(++section.quietSteps >= config.settleSteps) {
+                    if(++section.quietSteps >= config.settleSteps && settlesNow(section, config)) {
                         // Still finding its level through pressure too slight to count as flowing, like water rising up
                         // the far side of a U bend. Settled now it would stop well short, the surfaces joined through full
                         // water are levelled first and it comes to rest again.
@@ -1239,6 +1241,40 @@ public final class WaterSimulation {
             last = key;
             sections.get(key).levelled = true;
         }
+    }
+
+    /**
+     * Whether a section that stayed still for Settle Steps settles now. Puddles wait longer, see Puddle Settle Steps, while
+     * it rains for as long as it rains by default. They are told apart once on coming to rest and then now and then,
+     * spread out by section so a storm ending does not settle every puddle in the same step.
+     */
+    private boolean settlesNow(WaterSection section, ForgeConfigHandler.ServerConfig config) {
+        int puddleSteps = raining ? config.stormPuddleSettleSteps : config.puddleSettleSteps;
+        boolean forever = raining && puddleSteps == 0;
+        if(!forever && puddleSteps <= config.settleSteps) return true;
+        int waited = section.quietSteps - config.settleSteps;
+        if(waited > 0 && Math.floorMod(waited + (int)(section.key ^ section.key >>> 32), PUDDLE_CHECK_STEPS) != 0) return false;
+        if(!isPuddles(section)) return true;
+        return !forever && section.quietSteps >= puddleSteps;
+    }
+
+    /**
+     * Whether the water of a section is puddles alone, none of it deeper than half a block or resting on water, like
+     * the client tells puddles apart, see ClientWaterCache.puddles
+     */
+    private boolean isPuddles(WaterSection section) {
+        WaterSection under = section.sy > 0 ? sections.get(Water.sectionKey(section.sx, section.sy - 1, section.sz)) : null;
+        if(under != null && under.terrain == null) under = null;
+        for(int i = 0; i < 4096; i++) {
+            int mass = section.mass[i];
+            if(mass == 0) continue;
+            if(mass > Water.FULL / 2) return false;
+            if(i >= 256) {
+                if(section.mass[i - 256] != 0 || section.terrain[i - 256] >= WaterSection.SETTLED) return false;
+            }
+            else if(under != null && (under.mass[i + 3840] != 0 || under.terrain[i + 3840] >= WaterSection.SETTLED)) return false;
+        }
+        return true;
     }
 
     /** Whether a section has not been still for half the steps water needs to settle */
