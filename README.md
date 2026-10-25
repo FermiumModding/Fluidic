@@ -69,7 +69,9 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   corner heights, and draws it after the world. Between updates the water moves on smoothly (`WaterMotion`): within a
   few chunks of the camera each section eases its heights from where the water is shown to the new ones, over about the
   time between updates, and is rebuilt from the eased heights every frame with the sections around it, so every frame is
-  a whole surface. The water is shown up to one update behind (`Smooth Water Motion` in the client config). Water blocks
+  a whole surface. The water is shown up to one update behind (`Smooth Water Motion` in the client config). Further
+  than `Full Detail Distance` (2 chunks by default) updates of a section are held back and shown less often, up to half a
+  second apart, as if they arrived later, so the water around still meets them, and saves rebuilding the water there. Water blocks
   within two blocks of simulated water are left to this renderer by the chunks, so the two never meet where water moves
   (`ChunkRedraws`). Shader packs only shade what the chunks draw, so while an
   shader pack is in use, and always with Celeritas or its forks like Voxtavium, whose own chunk lighting separately drawn water

@@ -24,8 +24,6 @@ final class WaterMotion {
     /** Shortest and longest time the water takes to reach the heights sent, in nanoseconds */
     private static final long MIN_NANOS = 50_000_000L;
     private static final long MAX_NANOS = 500_000_000L;
-    /** Sections further away than this many chunks show new heights at once, their water is not rebuilt every frame */
-    private static final int EASE_DISTANCE = 4;
     private static final byte[] NO_WATER = new byte[4096];
     /** Least change of a cell that is eased, 1/32 of a block. Less is shown at once, see show. */
     private static final int MIN_EASED = 8;
@@ -149,12 +147,12 @@ final class WaterMotion {
         return bits;
     }
 
-    /** Whether a section is too far from the camera to ease */
+    /** Whether a section is too far from the camera to ease, further than its water is drawn in full detail */
     private static boolean far(long key) {
         Entity view = Minecraft.getMinecraft().getRenderViewEntity();
         if(view == null) return true;
         int cx = MathHelper.floor(view.posX) >> 4, cz = MathHelper.floor(view.posZ) >> 4;
-        return Math.max(Math.abs(Water.keyX(key) - cx), Math.abs(Water.keyZ(key) - cz)) > EASE_DISTANCE;
+        return Math.max(Math.abs(Water.keyX(key) - cx), Math.abs(Water.keyZ(key) - cz)) > ForgeConfigHandler.client.fullDetailDistance;
     }
 
     /**

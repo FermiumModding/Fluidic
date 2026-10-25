@@ -268,6 +268,14 @@ public class ForgeConfigHandler {
 		public boolean smoothWater = true;
 
 		@Config.Comment({
+				"Chunks from the camera simulated water is drawn in full detail: every update shown at once, eased by Smooth Water",
+				"Motion. Further out small changes are hard to see, updates are shown less often, up to half a second apart, which",
+				"saves rebuilding the water there."})
+		@Config.Name("Full Detail Distance")
+		@Config.RangeInt(min = 0, max = 32)
+		public int fullDetailDistance = 2;
+
+		@Config.Comment({
 				"Draws simulated water as part of the chunks it is in, as water blocks, instead of separately. Shader packs",
 				"only shade what the chunks draw, so this is needed for them, but water moving makes its chunks redraw,",
 				"which costs more in busy weather.",

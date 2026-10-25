@@ -8,9 +8,12 @@ import fluidic.sim.Water;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.entity.Entity;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -35,6 +38,13 @@ public final class ClientWaterCache {
     private static final SectionHeights SECTIONS = new SectionHeights();
     /** The heights sections switch to once the water that settled in them stops being drawn */
     private static final Long2ObjectOpenHashMap<Deferred> DEFERRED = new Long2ObjectOpenHashMap<>();
+    /** Updates of sections further than the water is drawn in full, held back, see holdTicks, and the tick they are shown */
+    private static final Long2ObjectOpenHashMap<byte[]> HELD = new Long2ObjectOpenHashMap<>();
+    private static final Long2IntOpenHashMap HELD_UNTIL = new Long2IntOpenHashMap();
+    /** Stands for an update of a section that has no water left, a held back update cannot be null */
+    private static final byte[] GONE = new byte[0];
+    /** Most ticks an update is held back */
+    private static final int MAX_HOLD_TICKS = 10;
     private static int dimension = Integer.MIN_VALUE;
     private static int ticks;
 
@@ -47,6 +57,46 @@ public final class ClientWaterCache {
             clear();
             dimension = packetDimension;
         }
+        // Further away than the water is drawn in full, a newer update replaces one held back but keeps its time
+        int hold = holdTicks(key);
+        if(hold > 0) {
+            if(HELD.put(key, heights == null ? GONE : heights) == null) HELD_UNTIL.put(key, ticks + hold);
+            return;
+        }
+        HELD.remove(key);
+        HELD_UNTIL.remove(key);
+        apply(key, heights);
+    }
+
+    /**
+     * Ticks an update of a section is held back. Small changes of water a few chunks away are hard to see, and every
+     * update rebuilds its mesh and the meshes beside it. Held back as a whole, it is shown as if it arrived later, the
+     * water around meets it as it is drawn.
+     */
+    private static int holdTicks(long key) {
+        Entity view = Minecraft.getMinecraft().getRenderViewEntity();
+        if(view == null) return 0;
+        int distance = Math.max(Math.abs((MathHelper.floor(view.posX) >> 4) - Water.keyX(key)), Math.abs((MathHelper.floor(view.posZ) >> 4) - Water.keyZ(key)));
+        int full = ForgeConfigHandler.client.fullDetailDistance;
+        return distance <= full ? 0 : Math.min(MAX_HOLD_TICKS, (distance - full) * 2);
+    }
+
+    /** Shows the updates held back whose time came, or that came near enough */
+    private static void releaseHeld() {
+        if(HELD.isEmpty()) return;
+        for(Iterator<Long2ObjectMap.Entry<byte[]>> it = HELD.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
+            Long2ObjectMap.Entry<byte[]> entry = it.next();
+            long key = entry.getLongKey();
+            if(ticks < HELD_UNTIL.get(key) && holdTicks(key) > 0) continue;
+            byte[] heights = entry.getValue();
+            it.remove();
+            HELD_UNTIL.remove(key);
+            apply(key, heights == GONE ? null : heights);
+        }
+    }
+
+    private static void apply(long key, byte[] heights) {
+        Minecraft mc = Minecraft.getMinecraft();
         WaterMotion.arrived(key);
         // Water that settled into blocks keeps being drawn until the chunk is redrawn with the new blocks. That runs on
         // worker threads and can take many ticks in busy weather, until then the cell would show a hole.
@@ -86,6 +136,11 @@ public final class ClientWaterCache {
         WorldClient current = Minecraft.getMinecraft().world;
         FluidicWater.clientVanilla = current != null && !FluidicWater.isFinite(current);
         ChunkWater.update();
+        if(current == null) {
+            HELD.clear();
+            HELD_UNTIL.clear();
+        }
+        else releaseHeld();
         if(DEFERRED.isEmpty()) return;
         if(Minecraft.getMinecraft().world == null) {
             DEFERRED.clear();
@@ -175,6 +230,8 @@ public final class ClientWaterCache {
         for(int sy = 0; sy < 16; sy++) {
             long key = Water.sectionKey(cx, sy, cz);
             DEFERRED.remove(key);
+            HELD.remove(key);
+            HELD_UNTIL.remove(key);
             WaterRenderer.unloadSection(key);
             if(SECTIONS.remove(key) != null) WaterRenderer.markDirty(key, ALL_BORDERS);
         }
@@ -183,6 +240,13 @@ public final class ClientWaterCache {
     /** A block changed, simulated water beside it draws its faces and corners against it */
     public static void blockChanged(BlockPos pos) {
         ChunkRedraws.blockChanged(pos);
+        // Water woken from its block is sent before the block goes, held back the block would leave a hole until it is shown
+        long section = Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
+        byte[] held = HELD.remove(section);
+        if(held != null) {
+            HELD_UNTIL.remove(section);
+            apply(section, held == GONE ? null : held);
+        }
         LongOpenHashSet dirty = null;
         for(int dx = -1; dx <= 1; dx++) {
             for(int dy = -1; dy <= 1; dy++) {
@@ -201,6 +265,8 @@ public final class ClientWaterCache {
     public static void clear() {
         SECTIONS.clear();
         DEFERRED.clear();
+        HELD.clear();
+        HELD_UNTIL.clear();
         ChunkRedraws.clear();
         dimension = Integer.MIN_VALUE;
         WaterRenderer.clear();
