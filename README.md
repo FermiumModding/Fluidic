@@ -133,8 +133,10 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
 * Glass panes are `thin` (`ThinBlockWater`): they hold back water like a wall, and water beside one is drawn reaching
   into its block up to the glass, on each side separately, instead of stopping at the edge of the block. Other blocks
   can be listed as thin too, like walls: panes, walls, fences and blocks of other mods that join their neighbours
-  like them are drawn as a post with arms, other blocks by their bounding box. A thin block blocks water across its
-  whole block, water beside it is only drawn reaching in.
+  like them are drawn as a post with arms, other blocks by their bounding box. A thin block joining two or more blocks
+  beside it blocks water across its whole block, water beside it is only drawn reaching in. One joining at most one,
+  like a pane standing alone as a pole or at the end of a row, lets water flow through it like a ladder
+  (`Terrain.passesWater`).
 
 ## Fluidlogged API
 

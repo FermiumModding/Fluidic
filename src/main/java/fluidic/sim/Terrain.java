@@ -10,6 +10,7 @@ import net.minecraft.block.BlockConcretePowder;
 import net.minecraft.block.BlockDoor;
 import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
+import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
@@ -41,7 +42,10 @@ public final class Terrain {
     /** Facings in simulation direction order */
     private static final EnumFacing[] FACINGS = {EnumFacing.DOWN, EnumFacing.UP, EnumFacing.NORTH, EnumFacing.SOUTH, EnumFacing.WEST, EnumFacing.EAST};
 
-    /** Config class of blocks like glass panes: solid to the simulation, water beside them is drawn up to them */
+    /**
+     * Config class of blocks like glass panes: solid to the simulation unless water passes through them, see
+     * #passesWater, water beside them is drawn up to them
+     */
     private static final byte THIN = 14;
 
     /** Class names usable in the config */
@@ -170,7 +174,7 @@ public final class Terrain {
     public static byte classify(World world, BlockPos pos, IBlockState state) {
         if(FluidicWater.isReservoir(world, pos, state)) return WaterSection.RESERVOIR;
         if(isDoor(state)) return door(world, pos, state);
-        byte code = classify(state);
+        byte code = thin(world, pos, state, classify(state));
         // Water stored inside the block by Fluidlogged API is settled water there
         if(FluidloggedCompat.isLoaded() && storesWater(code)) {
             int level = FluidloggedCompat.waterLevel(world, pos);
@@ -247,9 +251,42 @@ public final class Terrain {
         return classify(state) == WaterSection.POROUS;
     }
 
-    /** A block like a glass pane, listed as thin: it blocks water, and water beside it is drawn reaching up to it */
+    /**
+     * A block like a glass pane, listed as thin: water beside it is drawn reaching up to it. It blocks water where it
+     * splits its block, see #passesWater.
+     */
     public static boolean isThin(IBlockState state) {
         return configured(state) == THIN;
+    }
+
+    /** Terrain code of a block at a position given its code without the position, thin blocks water passes through are permeable */
+    private static byte thin(IBlockAccess world, BlockPos pos, IBlockState state, byte code) {
+        return code == WaterSection.SOLID_SMOOTH && isThin(state) && passesWater(world, pos, state) ? WaterSection.PERMEABLE : code;
+    }
+
+    /**
+     * Whether water passes through a thin block. One joining at most one block beside it, like a pane standing alone as
+     * a pole or at the end of a row, only fills a post and an arm, water flows around them. Joining more splits its
+     * block into parts water cannot cross between, like a row of panes or the corner of a wall. Thin blocks of other
+     * mods that join nothing pass water unless they reach across their block. Blocks beside it that are not loaded
+     * might join it, it blocks water until they load.
+     */
+    public static boolean passesWater(IBlockAccess world, BlockPos pos, IBlockState state) {
+        if(world instanceof World) {
+            for(EnumFacing facing : EnumFacing.HORIZONTALS) if(!((World)world).isBlockLoaded(pos.offset(facing))) return false;
+        }
+        IBlockState actual = state.getActualState(world, pos);
+        int joins = 0;
+        boolean sides = false;
+        for(IProperty<?> property : actual.getPropertyKeys()) {
+            String name = property.getName();
+            if(property.getValueClass() != Boolean.class || !(name.equals("north") || name.equals("south") || name.equals("west") || name.equals("east"))) continue;
+            sides = true;
+            if((Boolean)actual.getValue(property)) joins++;
+        }
+        if(sides) return joins <= 1;
+        AxisAlignedBB box = state.getBoundingBox(world, pos);
+        return !(box.minX <= 0.0D && box.maxX >= 1.0D) && !(box.minZ <= 0.0D && box.maxZ >= 1.0D);
     }
 
     public static boolean isSink(IBlockState state) {
@@ -391,6 +428,7 @@ public final class Terrain {
                     IBlockState state = storage.get(x, y, z);
                     byte code = classify(state);
                     if(isDoor(state)) code = door(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z), state);
+                    else code = thin(world, pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z), state, code);
                     if(fluidlogged && storesWater(code)) {
                         // Water Fluidlogged API keeps inside the block is settled water, the block may take settling water
                         pos.setPos(sx * 16 + x, sy * 16 + y, sz * 16 + z);

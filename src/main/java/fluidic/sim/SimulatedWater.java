@@ -252,7 +252,7 @@ public final class SimulatedWater {
     public static boolean eyesSubmerged(World world, double x, double y, double z) {
         if(isSubmerged(world, x, y, z)) return true;
         BlockPos pos = new BlockPos(x, y, z);
-        if(!FluidicWater.isThin(world, world.getBlockState(pos))) return false;
+        if(!FluidicWater.isThin(world, pos, world.getBlockState(pos))) return false;
         int sx = x - pos.getX() < 0.5D ? -1 : 1, sz = z - pos.getZ() < 0.5D ? -1 : 1;
         return underSurface(world, pos.add(sx, 0, 0), y) || underSurface(world, pos.add(0, 0, sz), y) || underSurface(world, pos.add(sx, 0, sz), y);
     }

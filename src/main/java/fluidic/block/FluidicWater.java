@@ -262,9 +262,12 @@ public final class FluidicWater {
         return surfaceCorner(world, corner, rendering);
     }
 
-    /** Whether water beside a block is drawn reaching into it up to the block, like a glass pane, see Terrain.isThin */
-    public static boolean isThin(IBlockAccess world, IBlockState state) {
-        return isFinite(world) && Terrain.isThin(state);
+    /**
+     * Whether water beside a block is drawn reaching into it up to the block, like a glass pane, see Terrain.isThin.
+     * Not one water passes through, like a pane standing alone, the water inside it is its own.
+     */
+    public static boolean isThin(IBlockAccess world, BlockPos pos, IBlockState state) {
+        return isFinite(world) && Terrain.isThin(state) && !Terrain.passesWater(world, pos, state);
     }
 
     /**

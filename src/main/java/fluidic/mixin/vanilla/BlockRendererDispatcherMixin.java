@@ -34,7 +34,7 @@ public abstract class BlockRendererDispatcherMixin {
     @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void fluidic_waterInside(IBlockState state, BlockPos pos, IBlockAccess world, BufferBuilder buffer, CallbackInfoReturnable<Boolean> cir) {
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
-        if(layer == BlockRenderLayer.TRANSLUCENT && FluidicWater.isThin(world, state)) {
+        if(layer == BlockRenderLayer.TRANSLUCENT && FluidicWater.isThin(world, pos, state)) {
             int start = buffer.getVertexCount();
             boolean drawn = ThinBlockWater.drawBesideWater(world, pos, state, buffer);
             if(drawn) ChunkWater.drewWater(start, buffer.getVertexCount(), FluidicWater.state(Water.LEVELS));

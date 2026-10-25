@@ -38,6 +38,8 @@ final class WaterWorldListener implements IWorldEventListener {
         // reaches catch up with their next terrain refresh.
         if(FluidicWater.generating > 0) return;
         if(!FluidicWater.placing && FluidicWater.isWater(oldState) && !FluidicWater.isWater(newState)) displaced(world, pos, oldState, newState);
+        // Thin blocks never join water, air or plants, water settling and drying beside them changes nothing
+        if(oldState.getMaterial().blocksMovement() || newState.getMaterial().blocksMovement()) thinBlocksBeside(world, pos);
         if(Terrain.isDoor(oldState) || Terrain.isDoor(newState)) {
             // A door opening only changes its lower half, the upper half turns with it. The old state no longer tells
             // the door's old side, the world holds the new one already, so both halves are set again.
@@ -62,6 +64,27 @@ final class WaterWorldListener implements IWorldEventListener {
     }
 
     /**
+     * Thin blocks like panes join the blocks beside them, and whether water passes through them depends on how many
+     * they join, see Terrain.passesWater. A block changing beside one changes that without changing the thin block's
+     * state, so it is set again, and settled water around it checks whether it can flow through now.
+     */
+    private void thinBlocksBeside(World world, BlockPos pos) {
+        for(EnumFacing facing : EnumFacing.HORIZONTALS) {
+            BlockPos thin = pos.offset(facing);
+            if(!world.isBlockLoaded(thin)) continue;
+            IBlockState state = world.getBlockState(thin);
+            if(!Terrain.isThin(state)) continue;
+            simulation.setTerrain(thin, Terrain.classify(world, thin, state));
+            for(EnumFacing side : EnumFacing.HORIZONTALS) {
+                BlockPos beside = thin.offset(side);
+                if(beside.equals(pos) || !world.isBlockLoaded(beside)) continue;
+                IBlockState water = world.getBlockState(beside);
+                if(FluidicWater.isWater(water)) BlockFluidicWater.neighborChanged(world, beside, water);
+            }
+        }
+    }
+
+    /**
      * A block took the place of a water block: sand fell in, a piston pushed in, a player built into a pool. Water is
      * finite, so it moves instead of vanishing: into the block when water can be in it, like stairs, or on top of the
      * water above it. Water taken out on purpose, leaving air, is gone. Ice keeps the water, and the sea is endless.
@@ -73,7 +96,7 @@ final class WaterWorldListener implements IWorldEventListener {
         if(FluidloggedCompat.waterLevel(world, pos) > 0) return;
         if(FluidicWater.isReservoir(world, pos, water)) return;
         int amount = FluidicWater.level(water) * Water.UNIT;
-        if(WaterSection.holds(Terrain.classify(block)) || Terrain.isDoor(block)) {
+        if(WaterSection.holds(Terrain.classify(world, pos, block))) {
             simulation.addWater(pos, amount);
             return;
         }

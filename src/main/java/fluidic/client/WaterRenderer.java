@@ -431,7 +431,7 @@ public final class WaterRenderer {
 
     /** Whether a block beside is a thin block like a glass pane, the water reaching into it is drawn by {@link #thinBlocks} */
     private static boolean isThin(SectionBlocks world, int x, int y, int z) {
-        return FluidicWater.isThin(world, world.state(x, y, z));
+        return FluidicWater.isThin(world, new BlockPos(x, y, z), world.state(x, y, z));
     }
 
     /**
@@ -446,7 +446,7 @@ public final class WaterRenderer {
                 if(dx == 0 && dz == 0) continue;
                 BlockPos pos = water.add(dx, 0, dz);
                 IBlockState state = world.getBlockState(pos);
-                if(!FluidicWater.isThin(world, state) || !ThinBlockWater.drawsFor(pos, water)) continue;
+                if(!FluidicWater.isThin(world, pos, state) || !ThinBlockWater.drawsFor(pos, water)) continue;
                 // Lit by the thin block's own light, like ThinBlockWater.drawBesideWater lights settled water in it
                 int light = world.light(x + dx, y, z + dz);
                 int sky = (light >> 20 & 15) << 4, block = light & 65535;

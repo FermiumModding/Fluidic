@@ -149,7 +149,7 @@ public final class ThinBlockWater {
             float[] heights = heights(world, pos, fed);
             // Water going on up into the block above, more water reaching into it, has no surface here
             boolean covered = heights[0] >= 1.0F && heights[1] >= 1.0F && heights[2] >= 1.0F && heights[3] >= 1.0F
-                    && FluidicWater.isThin(world, world.getBlockState(pos.up()));
+                    && FluidicWater.isThin(world, pos.up(), world.getBlockState(pos.up()));
             for(int i = 0; i < nx; i++) {
                 for(int j = 0; j < nz; j++) {
                     if(pool[i][j] != p) continue;
@@ -321,7 +321,7 @@ public final class ThinBlockWater {
 
     /** Whether water at the edge of the block goes on into the block beside it, water or another thin block */
     private static boolean continues(IBlockAccess world, BlockPos pos, int water) {
-        return water != DRY || FluidicWater.isThin(world, world.getBlockState(pos));
+        return water != DRY || FluidicWater.isThin(world, pos, world.getBlockState(pos));
     }
 
     /** A face from the bottom of the block up to the surface between two points, drawn from both sides */
