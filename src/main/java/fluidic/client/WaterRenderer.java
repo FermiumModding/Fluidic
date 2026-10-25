@@ -877,7 +877,18 @@ public final class WaterRenderer {
         if(raised(world, x, y + 1, z)) return 1.0F;
         // Full water reaches up to an opaque block above it instead of leaving a gap of air under it
         if(height >= 255 && isOpaque(world, x, y + 1, z)) return 1.0F;
-        return height / 255.0F * FULL_HEIGHT;
+        // The top of a column of water starts at the bottom of its block once drawn, a trace above it raises it toward the
+        // top, see FluidicWater.simSurface
+        boolean onWater = ClientWaterCache.height(x, y - 1, z) > 0 || isLiquid(world, x, y - 1, z);
+        int above = y < 255 && noWaterBeside(world, x, y + 1, z) ? ClientWaterCache.height(x, y + 1, z) : 0;
+        return FluidicWater.tracedSurface(FluidicWater.simSurface(height, onWater && noWaterBeside(world, x, y, z)), above);
+    }
+
+    /** Whether no water is beside a block, simulated or a water block shown, see FluidicWater.simSurface */
+    private static boolean noWaterBeside(SectionBlocks world, int x, int y, int z) {
+        return ClientWaterCache.height(x - 1, y, z) == 0 && ClientWaterCache.height(x + 1, y, z) == 0 && ClientWaterCache.height(x, y, z - 1) == 0
+                && ClientWaterCache.height(x, y, z + 1) == 0 && !isLiquid(world, x - 1, y, z) && !isLiquid(world, x + 1, y, z)
+                && !isLiquid(world, x, y, z - 1) && !isLiquid(world, x, y, z + 1);
     }
 
     /** Rendered level of a water block, -1 if there is none */

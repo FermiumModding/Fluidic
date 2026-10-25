@@ -193,6 +193,37 @@ public final class FluidicWater {
         return height > 0 && !isTrace(world, pos, height);
     }
 
+    /**
+     * Surface of simulated water of a height above the bottom of its block. At the top of a column of water, resting on
+     * water with none beside it, it starts at the bottom once it is drawn, see MIN_DRAWN, until then the water under it
+     * rises toward it, see tracedSurface. Water draining down a tube or rising up a U bend crosses from one block to the
+     * next without a step. Surfaces of pools and thin layers on them keep the height water blocks of the same level have.
+     */
+    public static float simSurface(int height, boolean columnTop) {
+        if(!columnTop) return height / 255.0F * Water.RENDER_HEIGHT;
+        return Math.max(0, height - MIN_DRAWN) / (255.0F - MIN_DRAWN) * Water.RENDER_HEIGHT;
+    }
+
+    /**
+     * A surface of simulated water raised toward the top of its block by a trace of water above it, too little to draw
+     * itself at the top of a column, see simSurface. Full from half of MIN_DRAWN, below which drawn water thinning out
+     * stops being drawn, see ClientWaterCache.steadyTraces, and the water above is drawn from the bottom of its block
+     * once it is.
+     */
+    public static float tracedSurface(float surface, int above) {
+        if(above <= 0 || above >= MIN_DRAWN || surface >= 1.0F) return surface;
+        return surface + (1.0F - surface) * Math.min(1.0F, above / (MIN_DRAWN / 2.0F));
+    }
+
+    /** Whether no water is beside a block, simulated or a water block, see simSurface */
+    public static boolean noWaterBeside(IBlockAccess world, BlockPos pos) {
+        for(EnumFacing side : EnumFacing.HORIZONTALS) {
+            BlockPos beside = pos.offset(side);
+            if(simHeight(beside) > 0 || world.getBlockState(beside).getMaterial().isLiquid()) return false;
+        }
+        return true;
+    }
+
     /** Water below a thin layer counts as full from this height, 7/8 of a block */
     private static final int FILM_BASE = 255 * 7 / 8;
     /** Thickest water that counts as a thin layer, 3/8 of a block. The partly drained top of a deeper pool is no layer. */
@@ -251,7 +282,11 @@ public final class FluidicWater {
         boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN || drawnSimulated(world, pos.up());
         if(!state.getMaterial().isLiquid()) {
             int sim = simHeight(pos);
-            if(sim > 0) return waterAbove || sim >= 255 && underCeiling(world, pos) ? 1.0F : sim / 255.0F * Water.RENDER_HEIGHT;
+            if(sim > 0) {
+                if(waterAbove || sim >= 255 && underCeiling(world, pos)) return 1.0F;
+                boolean onWater = world.getBlockState(pos.down()).getMaterial().isLiquid() || simHeight(pos.down()) > 0;
+                return tracedSurface(simSurface(sim, onWater && noWaterBeside(world, pos)), noWaterBeside(world, pos.up()) ? simHeight(pos.up()) : 0);
+            }
             // Water Fluidlogged API keeps inside the block, like stairs, meets the water around it at its height
             int stored = FluidloggedCompat.waterLevel(world, pos);
             if(stored > 0) return waterAbove ? 1.0F : 1.0F - BlockLiquid.getLiquidHeightPercent(state(stored).getValue(BlockLiquid.LEVEL));

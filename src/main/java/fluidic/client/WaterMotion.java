@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
@@ -108,7 +109,8 @@ final class WaterMotion {
         // Too little moves to see, like rain landing on a pool, it is shown at once. Eased, the section and the ones around it
         // would be rebuilt every frame for nothing.
         int most = 0, borders = 0, eased = 0;
-        boolean drops = true;
+        WorldClient world = Minecraft.getMinecraft().world;
+        boolean drops = world != null && world.isRaining();
         for(int i = 0; i < 4096; i++) {
             int change = (to[i] & 255) - (from[i] & 255);
             if(change == 0) continue;
@@ -116,7 +118,8 @@ final class WaterMotion {
             borders |= nearBorders(i & 15, i >> 8, (i >> 4) & 15);
             if(Math.abs(change) < MIN_EASED) continue;
             eased++;
-            drops &= change > 0 && change <= MAX_DROP;
+            // Only where rain falls, water rising slowly like up a U bend changes the same way
+            drops = drops && change > 0 && change <= MAX_DROP && eased <= MAX_DROPS && rainedOn(world, key, i);
         }
         motion.to = to;
         // Raindrops landing are shown at once too: a cell or two rising by about an eighth, the rest hardly changing.
@@ -132,6 +135,12 @@ final class WaterMotion {
         motion.start = now;
         motion.duration = motion.interval;
         MOVING.add(key);
+    }
+
+    /** Whether rain lands on a cell of a section: nothing above it stops the rain */
+    private static boolean rainedOn(WorldClient world, long key, int i) {
+        int x = Water.keyX(key) * 16 + (i & 15), y = Water.keyY(key) * 16 + (i >> 8), z = Water.keyZ(key) * 16 + ((i >> 4) & 15);
+        return world.getPrecipitationHeight(new BlockPos(x, 0, z)).getY() <= y + 1;
     }
 
     /** Whether the cell above a cell of a section loses water, as shown and sent */

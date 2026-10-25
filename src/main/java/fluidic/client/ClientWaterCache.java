@@ -276,10 +276,12 @@ public final class ClientWaterCache {
 
     /**
      * A trace of water on water that stays one, see FluidicWater.MIN_DRAWN. It is not drawn, and only the corners of drawn
-     * simulated water beside it at its level average it in, with none there no mesh changes.
+     * simulated water beside it at its level average it in, with none there no mesh changes. Simulated water under it rises
+     * with it until it is half as much as drawn water, see FluidicWater.tracedSurface.
      */
     private static boolean unseenTrace(Minecraft mc, BlockPos.MutableBlockPos pos, int x, int y, int z, int a, int b) {
         if(a == 0 || b == 0 || a >= FluidicWater.MIN_DRAWN || b >= FluidicWater.MIN_DRAWN) return false;
+        if(Math.min(a, b) < FluidicWater.MIN_DRAWN / 2 && height(x, y - 1, z) > 0) return false;
         if(!FluidicWater.isTrace(mc.world, pos.setPos(x, y, z), b)) return false;
         for(int dx = -1; dx <= 1; dx++) {
             for(int dz = -1; dz <= 1; dz++) {
