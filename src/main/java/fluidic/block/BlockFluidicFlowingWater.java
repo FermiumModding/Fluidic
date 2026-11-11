@@ -39,7 +39,8 @@ public class BlockFluidicFlowingWater extends BlockDynamicLiquid {
             if(FluidloggedCompat.waterLevel(world, pos) > 0) FluidloggedCompat.setWater(world, pos, here, FluidicWater.level(state), 3);
             return;
         }
-        world.setBlockState(pos, FluidicWater.state(FluidicWater.level(state)), 3);
+        // Under vanilla's rules it keeps its level, a source, flowing or falling water, the simulation tells them apart
+        world.setBlockState(pos, FluidicWater.vanillaRules ? FluidicWater.vanillaState(state.getValue(LEVEL)) : FluidicWater.state(FluidicWater.level(state)), 3);
     }
 
     @Override
@@ -69,6 +70,6 @@ public class BlockFluidicFlowingWater extends BlockDynamicLiquid {
     @Override
     @Nonnull
     protected Vec3d getFlow(@Nonnull IBlockAccess world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        return FluidicWater.isFinite(world) ? Vec3d.ZERO : super.getFlow(world, pos, state);
+        return FluidicWater.isFinite(world) && !FluidicWater.vanillaRules ? Vec3d.ZERO : super.getFlow(world, pos, state);
     }
 }

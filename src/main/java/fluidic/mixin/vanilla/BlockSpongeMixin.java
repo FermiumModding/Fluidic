@@ -1,5 +1,6 @@
 package fluidic.mixin.vanilla;
 
+import fluidic.block.FluidicWater;
 import fluidic.sim.SimManager;
 import net.minecraft.block.BlockSponge;
 import net.minecraft.block.state.IBlockState;
@@ -19,6 +20,7 @@ public abstract class BlockSpongeMixin {
 
     @Inject(method = "tryAbsorb", at = @At("HEAD"), cancellable = true)
     private void fluidic_simulatedAbsorb(World world, BlockPos pos, IBlockState state, CallbackInfo ci) {
-        if(SimManager.get(world) != null) ci.cancel();
+        // Under vanilla's rules sponges soak up water blocks the vanilla way
+        if(SimManager.get(world) != null && !FluidicWater.vanillaRules) ci.cancel();
     }
 }

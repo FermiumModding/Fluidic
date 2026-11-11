@@ -47,6 +47,18 @@ public class ForgeConfigHandler {
 		@Config.RequiresWorldRestart
 		public int[] vanillaWaterDimensions = {};
 
+		@Config.Comment({
+				"Water follows vanilla's rules instead of keeping its volume: sources are endless, water flowing from them",
+				"gets a level lower with every block and dries up when its source is gone, and two sources side by side make",
+				"a third. The simulation still moves it, so it keeps flowing through blocks like stairs, ladders and open",
+				"doors and is drawn up to glass panes, see Block Classifications. Rain, evaporation, endless oceans, sponge",
+				"capacity, partly filled buckets and leaves holding water are left out, leaves block water as in vanilla.",
+				"Fountains place a water source while powered and drains delete water touching them. Not for worlds played",
+				"with it off: partly filled water left there drains away as flowing water without a source."})
+		@Config.Name("Vanilla Water Physics")
+		@Config.RequiresWorldRestart
+		public boolean vanillaWaterPhysics = false;
+
 		@Config.Comment("Threads used to step large simulations in parallel, 0 uses half the available processors.")
 		@Config.Name("Worker Threads")
 		@Config.RangeInt(min = 0, max = 64)

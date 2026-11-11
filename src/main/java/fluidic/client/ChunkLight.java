@@ -1,5 +1,8 @@
 package fluidic.client;
 
+import net.minecraft.block.material.Material;
+import net.minecraft.block.state.IBlockState;
+
 /**
  * Simulated water is no block, the world's light passes it as if it were air, so the ground under a pool of it would
  * be lit like dry ground while the same pool settled darkens it. While chunks are drawn, sky light inside simulated
@@ -33,6 +36,14 @@ public final class ChunkLight {
     public static int sky(int sky, int x, int y, int z) {
         if(!DRAWING.get()[0]) return sky;
         return drawnSky(sky, x, y, z);
+    }
+
+    /**
+     * Whether light at a block is dimmed for drawing: in an empty block or water. Not in a block holding water like a door,
+     * whose model is drawn there lit by it, darkened it would show darker than the same block beside the water.
+     */
+    public static boolean dimsAt(IBlockState state) {
+        return state.getMaterial() == Material.AIR || state.getMaterial().isLiquid();
     }
 
     /** {@link #sky} for a block access that only draws chunks */

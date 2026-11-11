@@ -7,6 +7,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.EnumSkyBlock;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
@@ -18,6 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Pseudo
 @Mixin(targets = "org.taumc.celeritas.impl.world.WorldSlice", remap = false)
 public abstract class WorldSliceMixin {
+
+    @Shadow(remap = false)
+    public abstract IBlockState getBlockState(int x, int y, int z);
 
     @Inject(method = "getBlockState(III)Lnet/minecraft/block/state/IBlockState;", at = @At("RETURN"), cancellable = true, require = 0)
     private void fluidic_chunkWater(int x, int y, int z, CallbackInfoReturnable<IBlockState> cir) {
@@ -31,6 +35,7 @@ public abstract class WorldSliceMixin {
     @Inject(method = "getLightFromNeighborsFor(Lnet/minecraft/world/EnumSkyBlock;Lnet/minecraft/util/math/BlockPos;)I", at = @At("RETURN"), cancellable = true, require = 0)
     private void fluidic_dimUnderWater(EnumSkyBlock type, BlockPos pos, CallbackInfoReturnable<Integer> cir) {
         if(type != EnumSkyBlock.SKY) return;
+        if(!ChunkLight.dimsAt(getBlockState(pos.getX(), pos.getY(), pos.getZ()))) return;
         int sky = cir.getReturnValueI();
         int dimmed = ChunkLight.sky(sky, pos.getX(), pos.getY(), pos.getZ());
         if(dimmed != sky) cir.setReturnValue(dimmed);

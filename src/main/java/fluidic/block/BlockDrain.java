@@ -34,18 +34,18 @@ public class BlockDrain extends Block {
 
     @Override
     public void onBlockAdded(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        if(!world.isRemote && !FluidicWater.isFinite(world)) world.scheduleUpdate(pos, this, DRAIN_TICKS);
+        if(!world.isRemote && !FluidicWater.isFiniteVolume(world)) world.scheduleUpdate(pos, this, DRAIN_TICKS);
     }
 
     @Override
     @SuppressWarnings("deprecation")
     public void neighborChanged(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Block block, @Nonnull BlockPos fromPos) {
-        if(!world.isRemote && !FluidicWater.isFinite(world)) world.scheduleUpdate(pos, this, DRAIN_TICKS);
+        if(!world.isRemote && !FluidicWater.isFiniteVolume(world)) world.scheduleUpdate(pos, this, DRAIN_TICKS);
     }
 
     @Override
     public void updateTick(@Nonnull World world, @Nonnull BlockPos pos, @Nonnull IBlockState state, @Nonnull Random rand) {
-        if(world.isRemote || FluidicWater.isFinite(world)) return;
+        if(world.isRemote || FluidicWater.isFiniteVolume(world)) return;
         boolean drained = false;
         for(EnumFacing facing : EnumFacing.values()) {
             BlockPos side = pos.offset(facing);

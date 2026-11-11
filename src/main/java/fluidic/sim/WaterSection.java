@@ -63,6 +63,11 @@ final class WaterSection {
     private static final int FLOW_SOURCE = 16;
     /** Settled water block, SETTLED + level (1-8) */
     static final byte SETTLED = 20;
+    /**
+     * Settled water falling from the water above it, under vanilla's rules, see {@link VanillaFlow}. It fills its block
+     * like a source, SETTLED + 8 there, but dries up without the water above. Below Terrain.STORABLE.
+     */
+    static final byte SETTLED_FALLING = SETTLED + Water.LEVELS + 1;
 
     // Pseudo codes for neighbours that have no usable terrain
     static final int MISSING = -1;
@@ -178,10 +183,49 @@ final class WaterSection {
         mass[i] += amount;
     }
 
+    /**
+     * Under vanilla's rules, what the water of each cell is, VanillaFlow.FLOWING, SOURCE or FALLING. Null while all of it
+     * is flowing water, as it always is otherwise.
+     */
+    byte[] kind;
+
+    byte kind(int i) {
+        return kind == null ? VanillaFlow.FLOWING : kind[i];
+    }
+
+    void setKind(int i, byte value) {
+        if(kind == null) {
+            if(value == VanillaFlow.FLOWING) return;
+            kind = new byte[4096];
+        }
+        kind[i] = value;
+    }
+
+    /** Sets the water of a cell under vanilla's rules, 0 empties it, and counts as water moving */
+    void setCell(int i, int amount, byte value) {
+        int old = mass[i];
+        if(amount == 0) {
+            if(old > 0) removeMass(i, old);
+        }
+        else if(old == 0) addMass(i, amount);
+        else mass[i] = amount;
+        setKind(i, amount == 0 ? VanillaFlow.FLOWING : value);
+        noteFlow(Water.FULL);
+    }
+
+    /** Whether a cell emptied since it was last asked, see removeMass */
+    boolean takeDrained(int i) {
+        if(flags[i] == 0) return false;
+        flags[i] = 0;
+        drained--;
+        return true;
+    }
+
     void removeMass(int i, int amount) {
         mass[i] -= amount;
         if(mass[i] == 0) {
             filled--;
+            if(kind != null) kind[i] = VanillaFlow.FLOWING;
             if(flags[i] == 0) {
                 flags[i] = FLAG_DRAINED;
                 drained++;

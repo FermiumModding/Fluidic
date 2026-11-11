@@ -11,6 +11,7 @@ import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.EnumSkyBlock;
@@ -64,7 +65,33 @@ public final class FluidicWater {
     /** Whether the client's current world keeps vanilla water, for block lookups that come without the world */
     public static volatile boolean clientVanilla;
 
-    /** Whether water in a world is Fluidic's finite water, false in the dimensions the config gives vanilla water */
+    /**
+     * Whether water follows vanilla's rules, endless sources and water flowing from them, while the simulation still moves
+     * it, see fluidic.sim.VanillaFlow. The server's config, set when its worlds load, clients are told when they join.
+     */
+    public static volatile boolean vanillaRules;
+
+    public static void setVanillaRules(boolean vanilla) {
+        if(vanillaRules == vanilla) return;
+        vanillaRules = vanilla;
+        // Leaves block water under vanilla's rules, see Terrain.classify
+        Terrain.reload();
+    }
+
+    /** Whether water in a world keeps its volume: Fluidic's water, and not under vanilla's rules */
+    public static boolean isFiniteVolume(World world) {
+        return !vanillaRules && isFinite(world);
+    }
+
+    /** Still water with a vanilla level: 0 a source, 1 to 7 flowing water from 7/8 down to 1/8, 8 falling water */
+    public static IBlockState vanillaState(int meta) {
+        return Blocks.WATER.getDefaultState().withProperty(BlockLiquid.LEVEL, Math.max(0, Math.min(15, meta)));
+    }
+
+    /**
+     * Whether water in a world is Fluidic's simulated water, false in the dimensions the config gives vanilla water.
+     * Under vanilla's rules too, see {@link #vanillaRules}, where it does not keep its volume, see {@link #isFiniteVolume}.
+     */
     public static boolean isFinite(World world) {
         int dimension = world.provider.getDimension();
         int[] vanilla = world.isRemote ? clientVanillaDimensions : ForgeConfigHandler.server.vanillaWaterDimensions;
@@ -103,7 +130,7 @@ public final class FluidicWater {
      * The body counts as a whole, past the edge of its biome too, see {@link Reservoirs}.
      */
     public static boolean isReservoir(World world, BlockPos pos, IBlockState state) {
-        return !world.isRemote && isWater(state) && level(state) == Water.LEVELS && pos.getY() < world.getSeaLevel() && Reservoirs.isReservoir(world, pos);
+        return !vanillaRules && !world.isRemote && isWater(state) && level(state) == Water.LEVELS && pos.getY() < world.getSeaLevel() && Reservoirs.isReservoir(world, pos);
     }
 
     /**
@@ -119,6 +146,8 @@ public final class FluidicWater {
      * level on top of deeper water is just the surface of a pool and counts as water.
      */
     public static boolean isPuddle(IBlockAccess world, BlockPos pos, IBlockState state) {
+        // Under vanilla's rules shallow water is flowing water, which carries and slows entities at any depth
+        if(vanillaRules) return false;
         // Water kept inside another block, like stairs, is no puddle
         if(!isWater(state) || level(state) > Water.LEVELS / 2) return false;
         if(world.getBlockState(pos.down()).getMaterial().isLiquid()) return false;
@@ -188,9 +217,16 @@ public final class FluidicWater {
      * as water blocks there, and none other is.
      */
     public static boolean drawnSimulated(IBlockAccess world, BlockPos pos) {
-        if(simulatedInChunks) return false;
+        if(simulatedInChunks) {
+            // In an empty block it reads as a water block. Inside a block like stairs, a door or a pane standing alone the
+            // chunk draws it in the block's turn, see ChunkWater.wantsWaterLayer, water blocks beside it meet it the same.
+            // Not in a thin block, its water is drawn split by its glass, see isThin
+            if(simHeight(pos) <= 0) return false;
+            IBlockState state = world.getBlockState(pos);
+            return state.getMaterial() != Material.AIR && !state.getMaterial().isLiquid() && Terrain.holdsWater(state) && !isThin(world, pos, state);
+        }
         int height = simHeight(pos);
-        return height > 0 && !isTrace(world, pos, height);
+        return height > 0 && !isTrace(world, pos, height) && simDrawnAt(world, pos);
     }
 
     /**
@@ -279,8 +315,11 @@ public final class FluidicWater {
         // Water continues up into a water block or into simulated water, like rain landing on a pool. Either way
         // the water below fills its block, without a gap under the water above it.
         // A trace drawn as part of the surface beside it counts too, see drawnSimulated
-        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN || drawnSimulated(world, pos.up());
+        boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid() || simHeight(pos.up()) >= MIN_DRAWN && simDrawnAt(world, pos.up())
+                || drawnSimulated(world, pos.up()) || wetThin(world, pos.up());
         if(!state.getMaterial().isLiquid()) {
+            // Simulated water in a thin block is drawn split by its glass, the blocks around meet it like the glass itself
+            if(vanillaRules && Terrain.isThin(state)) return -1.0F;
             int sim = simHeight(pos);
             if(sim > 0) {
                 if(waterAbove || sim >= 255 && underCeiling(world, pos)) return 1.0F;
@@ -338,7 +377,49 @@ public final class FluidicWater {
      * Not one water passes through, like a pane standing alone, the water inside it is its own.
      */
     public static boolean isThin(IBlockAccess world, BlockPos pos, IBlockState state) {
-        return isFinite(world) && Terrain.isThin(state) && !Terrain.passesWater(world, pos, state);
+        if(!isFinite(world) || !Terrain.isThin(state)) return false;
+        // Under vanilla's rules every one is, one water passes through too: the water in and beside it is drawn on each side
+        // of its glass, split by it, see fluidic.client.ThinBlockWater. Water only flows toward a drop, so one could be dry
+        // beside water running past, or hold water on the inside of its glass level with the water there and water on the
+        // outside level with the water outside.
+        return vanillaRules || !Terrain.passesWater(world, pos, state);
+    }
+
+    /**
+     * Simulated water drawn as water of its own block at a position, not in a thin block, whose water is drawn split by its
+     * glass from the water beside it, see isThin
+     */
+    public static boolean simDrawnAt(IBlockAccess world, BlockPos pos) {
+        return simHeight(pos) > 0 && !(vanillaRules && Terrain.isThin(world.getBlockState(pos)));
+    }
+
+    /**
+     * Whether water is on top of one of the four blocks around a corner, as vanilla's BlockFluidRenderer.getFluidHeight
+     * asks: a water block or simulated water drawn there. Not water reaching into a thin block, which is on one side of
+     * its glass only, and not across a door from the block being drawn.
+     */
+    private static boolean waterOnTopAround(IBlockAccess world, BlockPos corner, @Nullable BlockPos from) {
+        if(corner.getY() >= 255) return false;
+        for(int j = 0; j < 4; j++) {
+            BlockPos cell = corner.add(-(j & 1), 0, -(j >> 1 & 1));
+            if(from != null && apartByDoor(world, from, cell.getX(), cell.getZ())) continue;
+            BlockPos above = cell.up();
+            if(world.getBlockState(above).getMaterial().isLiquid() || simHeight(above) >= MIN_DRAWN && simDrawnAt(world, above)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Under vanilla's rules, whether a thin block holds water reaching into it from water beside one of its sides, see
+     * isThin and fluidic.client.ThinBlockWater. Water below it goes on up into it, like into any water above.
+     */
+    public static boolean wetThin(IBlockAccess world, BlockPos pos) {
+        if(!vanillaRules || pos.getY() < 0 || pos.getY() > 255 || !isThin(world, pos, world.getBlockState(pos))) return false;
+        for(EnumFacing side : EnumFacing.HORIZONTALS) {
+            BlockPos beside = pos.offset(side);
+            if(isWater(world.getBlockState(beside)) || simDrawnAt(world, beside)) return true;
+        }
+        return false;
     }
 
     /**
@@ -358,8 +439,19 @@ public final class FluidicWater {
         int fx = from.getX(), y = from.getY(), fz = from.getZ();
         if(x == fx && z == fz) return false;
         if(x == fx || z == fz) return doorBetween(world, fx, y, fz, x, z);
-        return (doorBetween(world, fx, y, fz, x, fz) || doorBetween(world, x, y, fz, x, z))
-                && (doorBetween(world, fx, y, fz, fx, z) || doorBetween(world, fx, y, z, x, z));
+        boolean doorAlongX = doorBetween(world, fx, y, fz, x, fz) || doorBetween(world, x, y, fz, x, z);
+        boolean doorAlongZ = doorBetween(world, fx, y, fz, fx, z) || doorBetween(world, fx, y, z, x, z);
+        if(!doorAlongX && !doorAlongZ) return false;
+        // The other way around the corner can be shut by a wall instead, like the wall a door is set in. Water inside the
+        // door would otherwise reach the water outside diagonally, past the end of its door.
+        return (doorAlongX || blocks(world, x, y, fz)) && (doorAlongZ || blocks(world, fx, y, z));
+    }
+
+    /** Whether a block stops water, like the wall beside a door */
+    private static boolean blocks(IBlockAccess world, int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        IBlockState state = world.getBlockState(pos);
+        return !Terrain.isDoor(state) && state.getMaterial().blocksMovement() && !state.getMaterial().isLiquid();
     }
 
     /** Whether a door is between two blocks side by side, in either of them */
@@ -379,6 +471,9 @@ public final class FluidicWater {
      * from the water at from, the block being drawn, is left out, each side of a door has its own surface.
      */
     private static float surfaceCorner(IBlockAccess world, BlockPos corner, @Nullable BlockPos from) {
+        // Under vanilla's rules corners rise to full height where water is on top of a block around them, as vanilla's
+        // fluid renderer draws them: flowing water ramps up to the water above it, like a stream meeting a waterfall
+        if(vanillaRules && waterOnTopAround(world, corner, from)) return 1.0F;
         // Simulated water moves all the time but water blocks are only redrawn when it appears or vanishes beside
         // them. Corners touching a water block leave it out, so the shared corner never goes stale and opens a gap.
         boolean blocks = false, doors = false;
@@ -468,6 +563,8 @@ public final class FluidicWater {
      * in the step down to that water would stand apart from the edge of its surface, a slit along it.
      */
     public static double sideX(IBlockAccess world, BlockPos pos, double x, double z) {
+        double inDoor = inDoor(world, pos, x, EnumFacing.Axis.X);
+        if(!Double.isNaN(inDoor)) return inDoor;
         EnumFacing side = sideOf(pos, x, z);
         if(side == null || side.getAxis() != EnumFacing.Axis.X || !waterAt(world, pos.offset(side))) return x;
         return pos.getX() + (side == EnumFacing.EAST ? 1.0D : 0.0D);
@@ -475,9 +572,29 @@ public final class FluidicWater {
 
     /** Where a vertex of a water block's side face goes along z, see {@link #sideX} */
     public static double sideZ(IBlockAccess world, BlockPos pos, double x, double z) {
+        double inDoor = inDoor(world, pos, z, EnumFacing.Axis.Z);
+        if(!Double.isNaN(inDoor)) return inDoor;
         EnumFacing side = sideOf(pos, x, z);
         if(side == null || side.getAxis() != EnumFacing.Axis.Z || !waterAt(world, pos.offset(side))) return z;
         return pos.getZ() + (side == EnumFacing.SOUTH ? 1.0D : 0.0D);
+    }
+
+    /**
+     * Water inside a door, drawn by the chunks as a water block, ends just inside the door like WaterRenderer draws it: a
+     * vertex on the side of the block the door is on, at its edge or set in from it, goes to the door's inner face, given
+     * and returned along an axis. Left on the edge, its side would cover the door's outer face. NaN for other vertices.
+     */
+    private static double inDoor(IBlockAccess world, BlockPos pos, double at, EnumFacing.Axis axis) {
+        IBlockState state = world.getBlockState(pos);
+        EnumFacing door = Terrain.doorSide(world, pos, state);
+        if(door == null || door.getAxis() != axis) return Double.NaN;
+        int origin = axis == EnumFacing.Axis.X ? pos.getX() : pos.getZ();
+        double local = at - origin;
+        AxisAlignedBB box = state.getBoundingBox(world, pos);
+        boolean low = door == EnumFacing.WEST || door == EnumFacing.NORTH;
+        if(low ? local > SIDE_INSET * 1.5D : local < 1.0D - SIDE_INSET * 1.5D) return Double.NaN;
+        double inner = low ? (axis == EnumFacing.Axis.X ? box.maxX : box.maxZ) + SIDE_INSET : (axis == EnumFacing.Axis.X ? box.minX : box.minZ) - SIDE_INSET;
+        return origin + inner;
     }
 
     /** The side of a water block a vertex of its side faces is on, by the inset vanilla draws them at, null for others */

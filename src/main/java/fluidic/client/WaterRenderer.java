@@ -32,6 +32,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.world.biome.BiomeColorHelper;
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.event.world.ChunkEvent;
@@ -437,7 +438,8 @@ public final class WaterRenderer {
         boolean taken = takenCells != null;
         if(heights == null && taken) heights = NO_WATER;
         // Puddles further than they are drawn in full, drawn simply, see buildPuddle
-        boolean simple = heights != null && !taken && ClientWaterCache.puddles(heights) && beyond(key, ForgeConfigHandler.client.puddleDetailDistance);
+        // Not under vanilla's rules, shallow water there is flowing water, drawn flowing however far away
+        boolean simple = heights != null && !taken && !FluidicWater.vanillaRules && ClientWaterCache.puddles(heights) && beyond(key, ForgeConfigHandler.client.puddleDetailDistance);
         boolean any = false;
         if(heights != null) {
             int ox = Water.keyX(key) * 16, oy = Water.keyY(key) * 16, oz = Water.keyZ(key) * 16;
@@ -604,6 +606,9 @@ public final class WaterRenderer {
     /** Adds the visible faces of one water cell in section local coordinates, returns whether any were added */
     private static boolean buildCell(SectionBlocks world, int ox, int oy, int oz, int lx, int ly, int lz) {
         int x = ox + lx, y = oy + ly, z = oz + lz;
+        // Under vanilla's rules water in a thin block is drawn split by its glass with the water beside it, see
+        // FluidicWater.isThin and thinBlocks
+        if(FluidicWater.vanillaRules && Terrain.isThin(world.state(x, y, z))) return false;
         // A water block the chunk on screen still shows, or already shows, draws this water. Drawing both doubles it,
         // darker, for a moment: waking water is sent before its block goes, settled water stays until the chunk has it.
         IBlockState drawn = shown(world, x, y, z);
@@ -642,23 +647,35 @@ public final class WaterRenderer {
         // Fluidic water under simulated water fills its block to the top itself.
         float floor = ClientWaterCache.height(x, y - 1, z) == 0 ? Math.min(0.0F, liquidLevel(world, x, y - 1, z) - 1.0F) : 0.0F;
 
+        // Water inside a door ends at the door: its surface, and its side there stands just off the door's inner face. At
+        // the edge of the block the side would lie in the door's outer face and flicker with it.
+        BlockPos at = new BlockPos(x, y, z);
+        IBlockState here = world.state(x, y, z);
+        EnumFacing door = Terrain.doorSide(world, at, here);
+
         if(surface < 1.0F) {
-            float u0 = still.getMinU(), u1 = still.getMaxU(), v0 = still.getMinV(), v1 = still.getMaxV();
+            // Corners northwest, southwest, southeast, northeast. Still water shows the still texture square on.
+            float[] uv = topUVs(world, x, y, z);
             // Water drawn by another mesh beside it, a water block of the chunk or the next section, meets it at the same
             // edge, but drawn apart the two do not rasterize watertight and single pixels show through along it. Reaching
             // a hair over the edge covers them.
-            float x0 = lx - overlap(world, x - 1, y, z, lx == 0), x1 = lx + 1 + overlap(world, x + 1, y, z, lx == 15);
-            float z0 = lz - overlap(world, x, y, z - 1, lz == 0), z1 = lz + 1 + overlap(world, x, y, z + 1, lz == 15);
-            vertex(x0, ly + h00, z0, u0, v0, sky, block);
-            vertex(x0, ly + h01, z1, u0, v1, sky, block);
-            vertex(x1, ly + h11, z1, u1, v1, sky, block);
-            vertex(x1, ly + h10, z0, u1, v0, sky, block);
+            float x0 = lx - overlap(world, x - 1, y, z, lx == 0, false), x1 = lx + 1 + overlap(world, x + 1, y, z, lx == 15, true);
+            float z0 = lz - overlap(world, x, y, z - 1, lz == 0, false), z1 = lz + 1 + overlap(world, x, y, z + 1, lz == 15, true);
+            // Inside a door it ends at the door, see below
+            if(door == EnumFacing.NORTH) z0 = lz + doorDepth(world, at, here, door);
+            else if(door == EnumFacing.SOUTH) z1 = lz + 1 - doorDepth(world, at, here, door);
+            else if(door == EnumFacing.WEST) x0 = lx + doorDepth(world, at, here, door);
+            else if(door == EnumFacing.EAST) x1 = lx + 1 - doorDepth(world, at, here, door);
+            vertex(x0, ly + h00, z0, uv[0], uv[1], sky, block);
+            vertex(x0, ly + h01, z1, uv[2], uv[3], sky, block);
+            vertex(x1, ly + h11, z1, uv[4], uv[5], sky, block);
+            vertex(x1, ly + h10, z0, uv[6], uv[7], sky, block);
             // Seen from below too, from inside the water, where vanilla's water draws it from below, see shownFromBelow
             if(shownFromBelow(world, x, y + 1, z)) {
-                vertex(x0, ly + h00, z0, u0, v0, sky, block);
-                vertex(x1, ly + h10, z0, u1, v0, sky, block);
-                vertex(x1, ly + h11, z1, u1, v1, sky, block);
-                vertex(x0, ly + h01, z1, u0, v1, sky, block);
+                vertex(x0, ly + h00, z0, uv[0], uv[1], sky, block);
+                vertex(x1, ly + h10, z0, uv[6], uv[7], sky, block);
+                vertex(x1, ly + h11, z1, uv[4], uv[5], sky, block);
+                vertex(x0, ly + h01, z1, uv[2], uv[3], sky, block);
             }
             added = true;
         }
@@ -675,12 +692,88 @@ public final class WaterRenderer {
             added = true;
         }
 
-        if(!isThin(world, x, y, z - 1)) added |= side(world, x, y, z - 1, lx, ly, lz + inset(world, x, y, z - 1), lx + 1, lz + inset(world, x, y, z - 1), h00, h10, s00, s10, floor, column, EnumFacing.NORTH);
-        if(!isThin(world, x, y, z + 1)) added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - inset(world, x, y, z + 1), lx, lz + 1 - inset(world, x, y, z + 1), h11, h01, s11, s01, floor, column, EnumFacing.SOUTH);
-        if(!isThin(world, x - 1, y, z)) added |= side(world, x - 1, y, z, lx + inset(world, x - 1, y, z), ly, lz + 1, lx + inset(world, x - 1, y, z), lz, h01, h00, s01, s00, floor, column, EnumFacing.WEST);
-        if(!isThin(world, x + 1, y, z)) added |= side(world, x + 1, y, z, lx + 1 - inset(world, x + 1, y, z), ly, lz, lx + 1 - inset(world, x + 1, y, z), lz + 1, h10, h11, s10, s11, floor, column, EnumFacing.EAST);
+        float north = door == EnumFacing.NORTH ? doorDepth(world, at, here, door) : inset(world, x, y, z - 1);
+        float south = door == EnumFacing.SOUTH ? doorDepth(world, at, here, door) : inset(world, x, y, z + 1);
+        float west = door == EnumFacing.WEST ? doorDepth(world, at, here, door) : inset(world, x - 1, y, z);
+        float east = door == EnumFacing.EAST ? doorDepth(world, at, here, door) : inset(world, x + 1, y, z);
+        if(!isThin(world, x, y, z - 1)) added |= side(world, x, y, z - 1, lx, ly, lz + north, lx + 1, lz + north, h00, h10, s00, s10, floor, column, EnumFacing.NORTH);
+        if(!isThin(world, x, y, z + 1)) added |= side(world, x, y, z + 1, lx + 1, ly, lz + 1 - south, lx, lz + 1 - south, h11, h01, s11, s01, floor, column, EnumFacing.SOUTH);
+        if(!isThin(world, x - 1, y, z)) added |= side(world, x - 1, y, z, lx + west, ly, lz + 1, lx + west, lz, h01, h00, s01, s00, floor, column, EnumFacing.WEST);
+        if(!isThin(world, x + 1, y, z)) added |= side(world, x + 1, y, z, lx + 1 - east, ly, lz, lx + 1 - east, lz + 1, h10, h11, s10, s11, floor, column, EnumFacing.EAST);
         added |= thinBlocks(world, x, y, z, lx, ly, lz);
         return added;
+    }
+
+    private static final float[] TOP_UVS = new float[8];
+
+    /**
+     * Texture coordinates of a cell's surface at its corners northwest, southwest, southeast and northeast, u and v each.
+     * The still texture, unless under vanilla's rules the water flows: then the flowing texture turned along the flow, as
+     * vanilla's fluid renderer draws flowing water blocks, so simulated water looks the same as the chunks draw it.
+     */
+    private static float[] topUVs(SectionBlocks world, int x, int y, int z) {
+        float[] uv = TOP_UVS;
+        double angle = FluidicWater.vanillaRules ? slopeAngle(world, x, y, z) : Double.NaN;
+        if(Double.isNaN(angle)) {
+            float u0 = still.getMinU(), u1 = still.getMaxU(), v0 = still.getMinV(), v1 = still.getMaxV();
+            uv[0] = u0; uv[1] = v0;
+            uv[2] = u0; uv[3] = v1;
+            uv[4] = u1; uv[5] = v1;
+            uv[6] = u1; uv[7] = v0;
+            return uv;
+        }
+        // As BlockFluidRenderer.renderFluid
+        float sin = MathHelper.sin((float)angle) * 0.25F, cos = MathHelper.cos((float)angle) * 0.25F;
+        uv[0] = flow.getInterpolatedU(8.0F + (-cos - sin) * 16.0F);
+        uv[1] = flow.getInterpolatedV(8.0F + (-cos + sin) * 16.0F);
+        uv[2] = flow.getInterpolatedU(8.0F + (-cos + sin) * 16.0F);
+        uv[3] = flow.getInterpolatedV(8.0F + (cos + sin) * 16.0F);
+        uv[4] = flow.getInterpolatedU(8.0F + (cos + sin) * 16.0F);
+        uv[5] = flow.getInterpolatedV(8.0F + (cos - sin) * 16.0F);
+        uv[6] = flow.getInterpolatedU(8.0F + (cos - sin) * 16.0F);
+        uv[7] = flow.getInterpolatedV(8.0F + (-cos - sin) * 16.0F);
+        return uv;
+    }
+
+    /**
+     * Direction water in a cell flows across its surface, as BlockLiquid.getSlopeAngle works it out for a water block,
+     * NaN where it does not flow. From vanilla levels: simulated water by its eighths, as the chunks draw it.
+     */
+    private static double slopeAngle(SectionBlocks world, int x, int y, int z) {
+        int here = depth(world, x, y, z);
+        if(here < 0) return Double.NaN;
+        double fx = 0.0D, fz = 0.0D;
+        for(EnumFacing facing : EnumFacing.HORIZONTALS) {
+            int nx = x + facing.getXOffset(), nz = z + facing.getZOffset();
+            int there = depth(world, nx, y, nz);
+            int k;
+            if(there >= 0) k = there - here;
+            else {
+                // Over an edge onto water below
+                if(y <= 0 || world.state(nx, y, nz).getMaterial().blocksMovement()) continue;
+                int below = depth(world, nx, y - 1, nz);
+                if(below < 0) continue;
+                k = below - (here - 8);
+            }
+            fx += facing.getXOffset() * k;
+            fz += facing.getZOffset() * k;
+        }
+        if(fx == 0.0D && fz == 0.0D) return Double.NaN;
+        return Math.atan2(fz, fx) - Math.PI / 2.0D;
+    }
+
+    /**
+     * Vanilla's rendered depth of the water in a cell, 0 for full or falling water to 7 for an eighth, -1 for none or
+     * another liquid. Simulated water there counts first, it is what is drawn.
+     */
+    private static int depth(SectionBlocks world, int x, int y, int z) {
+        if(y < 0 || y > 255) return -1;
+        int height = ClientWaterCache.height(x, y, z);
+        if(height > 0 && !isTrace(world, x, y, z)) return Water.LEVELS - Math.max(1, Math.min(Water.LEVELS, ClientWaterCache.eighths(height)));
+        IBlockState state = shown(world, x, y, z);
+        if(!FluidicWater.isWater(state)) return -1;
+        int meta = state.getValue(BlockLiquid.LEVEL);
+        return meta >= 8 ? 0 : meta;
     }
 
     /**
@@ -692,9 +785,32 @@ public final class WaterRenderer {
         return isSolid(world, x, y, z) || isOpaque(world, x, y, z) ? INSET : 0.0F;
     }
 
-    /** How far a surface reaches over its edge toward a block, see buildCell: water drawn by another mesh there */
-    private static float overlap(SectionBlocks world, int x, int y, int z, boolean otherSection) {
-        return isLiquid(world, x, y, z) || otherSection && ClientWaterCache.height(x, y, z) > 0 ? OVERLAP : 0.0F;
+    /** How far the inner face of a door is from the side of its block the door is on, and a little more, see buildCell */
+    private static float doorDepth(SectionBlocks world, BlockPos pos, IBlockState state, EnumFacing side) {
+        AxisAlignedBB box = state.getBoundingBox(world, pos);
+        double depth;
+        switch(side) {
+            case NORTH: depth = box.maxZ; break;
+            case SOUTH: depth = 1.0D - box.minZ; break;
+            case WEST: depth = box.maxX; break;
+            default: depth = 1.0D - box.minX;
+        }
+        return (float)depth + INSET;
+    }
+
+    /**
+     * How far a surface reaches over its edge toward a block, see buildCell: water drawn by another mesh there. Not a water
+     * block left to this renderer in the same section, see ChunkRedraws.Snapshot, drawn in this mesh: both surfaces would
+     * cover the strip, drawn twice it shows as a line along every edge.
+     *
+     * Across a section border the water beside is in another mesh of this renderer, which reaches back over the same edge.
+     * Only the side toward +x or +z reaches over, positive, so the strip is drawn once. Water the chunks draw does not
+     * reach back, that is reached over from either side.
+     */
+    private static float overlap(SectionBlocks world, int x, int y, int z, boolean otherSection, boolean positive) {
+        if(chunkDrawn(world, x, y, z)) return OVERLAP;
+        if(!otherSection || !positive) return 0.0F;
+        return isLiquid(world, x, y, z) || ClientWaterCache.height(x, y, z) > 0 ? OVERLAP : 0.0F;
     }
 
     /**
@@ -753,10 +869,14 @@ public final class WaterRenderer {
                 if(dx == 0 && dz == 0) continue;
                 BlockPos pos = water.add(dx, 0, dz);
                 IBlockState state = world.getBlockState(pos);
-                if(!FluidicWater.isThin(world, pos, state) || !ThinBlockWater.drawsFor(pos, water)) continue;
-                // Lit by the thin block's own light, like ThinBlockWater.drawBesideWater lights settled water in it
+                if(!FluidicWater.isThin(world, pos, state) || !ThinBlockWater.drawsFor(world, pos, water)) continue;
+                // Lit by the thin block's own light, like ThinBlockWater.drawBesideWater lights settled water in it. Under
+                // vanilla's rules the block can hold simulated water itself, drawn split by its glass, whose light the
+                // client world dims, see ChunkLight. Lit like water blocks are instead, by the light above when brighter.
                 int light = world.light(x + dx, y, z + dz);
-                int sky = (light >> 20 & 15) << 4, block = light & 65535;
+                int skyLevel = light >> 20 & 15;
+                if(FluidicWater.vanillaRules) skyLevel = Math.max(skyLevel, world.light(x + dx, y + 1, z + dz) >> 20 & 15);
+                int sky = skyLevel << 4, block = light & 65535;
                 added |= ThinBlockWater.draw(world, pos, state, true, (vx, vy, vz, u, v, shade) -> vertex(vx, vy, vz, u, v, sky, block, shade),
                         still, lx + dx, ly, lz + dz);
             }
@@ -870,11 +990,13 @@ public final class WaterRenderer {
     private static float surface(SectionBlocks world, int x, int y, int z) {
         int height = ClientWaterCache.height(x, y, z);
         if(height == 0) return liquidHeight(world, x, y, z);
+        // Water in a thin block under vanilla's rules is drawn split by its glass, the water beside meets it like the glass
+        if(!FluidicWater.simDrawnAt(world, new BlockPos(x, y, z))) return -1.0F;
         // A trace is not drawn, faces beside it show like beside air, see FluidicWater.drawnSimulated
         if(isTrace(world, x, y, z)) return liquidHeight(world, x, y, z);
         // A water block drawn here, its simulated water not taken in yet, see ChunkRedraws.Snapshot
         if(FluidicWater.isWater(shown(world, x, y, z)) && ChunkRedraws.taken(x, y, z)) return liquidHeight(world, x, y, z);
-        if(raised(world, x, y + 1, z)) return 1.0F;
+        if(raised(world, x, y + 1, z) || y < 255 && FluidicWater.wetThin(world, new BlockPos(x, y + 1, z))) return 1.0F;
         // Full water reaches up to an opaque block above it instead of leaving a gap of air under it
         if(height >= 255 && isOpaque(world, x, y + 1, z)) return 1.0F;
         // The top of a column of water starts at the bottom of its block once drawn, a trace above it raises it toward the
@@ -909,7 +1031,8 @@ public final class WaterRenderer {
                 ChunkRedraws.endView(before);
             }
         }
-        if(raised) return 1.0F;
+        // Under water reaching into a thin block above, like the panes beside water falling past them
+        if(raised || y < 255 && FluidicWater.wetThin(world, new BlockPos(x, y + 1, z))) return 1.0F;
         if(FluidicWater.isWater(state) && FluidicWater.level(state) == Water.LEVELS && isOpaque(world, x, y + 1, z)) return 1.0F;
         if(state.getBlock() instanceof BlockLiquid) return 1.0F - BlockLiquid.getLiquidHeightPercent(state.getValue(BlockLiquid.LEVEL));
         return FULL_HEIGHT;
@@ -969,6 +1092,24 @@ public final class WaterRenderer {
     }
 
     private static float cornerOf(SectionBlocks world, int x, int y, int z, float fallback, BlockPos cell) {
+        // Under vanilla's rules corners rise to full height where water is on top of a block around them, like water blocks,
+        // see FluidicWater.surfaceCorner
+        if(FluidicWater.vanillaRules && y < 255) {
+            // Across a door depends on the cell asking, such a corner is not kept, see sharedCorner
+            boolean anyDoor = false;
+            for(int dx = -1; dx <= 0; dx++) {
+                for(int dz = -1; dz <= 0; dz++) anyDoor |= Terrain.isDoor(world.state(x + dx, y, z + dz));
+            }
+            for(int dx = -1; dx <= 0; dx++) {
+                for(int dz = -1; dz <= 0; dz++) {
+                    if(anyDoor && FluidicWater.apartByDoor(world, cell, x + dx, z + dz)) continue;
+                    if(raised(world, x + dx, y + 1, z + dz)) {
+                        if(anyDoor) cornerDoors = true;
+                        return 1.0F;
+                    }
+                }
+            }
+        }
         // Corners touching water blocks follow the blocks alone, like FluidicWater.cornerHeight, the blocks are only
         // redrawn when simulated water appears or vanishes beside them, not every time it moves
         boolean blocks = false, doors = false;
@@ -1001,6 +1142,8 @@ public final class WaterRenderer {
                 float s;
                 // Water across the closed side of a door has its own surface
                 if(doors && FluidicWater.apartByDoor(world, cell, x + dx, z + dz)) continue;
+                // Water in a thin block is left out like the glass, see FluidicWater.isThin
+                if(FluidicWater.vanillaRules && Terrain.isThin(world.state(x + dx, y, z + dz))) continue;
                 if(isLiquid(world, x + dx, y, z + dz)) s = liquidHeight(world, x + dx, y, z + dz);
                 // A trace resting on water counts as an empty cell, see FluidicWater.surfaceCorner
                 else if(isTrace(world, x + dx, y, z + dz)) s = -1.0F;
@@ -1069,8 +1212,10 @@ public final class WaterRenderer {
      * surface beside it, see FluidicWater.isTrace, would otherwise be drawn as a second surface just above the one below.
      */
     private static boolean raised(SectionBlocks world, int x, int y, int z) {
+        if(isLiquid(world, x, y, z)) return true;
         int height = ClientWaterCache.height(x, y, z);
-        return height >= FluidicWater.MIN_DRAWN || isLiquid(world, x, y, z) || height > 0 && !FluidicWater.isTrace(world, new BlockPos(x, y, z), height);
+        if(height == 0 || !FluidicWater.simDrawnAt(world, new BlockPos(x, y, z))) return false;
+        return height >= FluidicWater.MIN_DRAWN || !FluidicWater.isTrace(world, new BlockPos(x, y, z), height);
     }
 
     /** See FluidicWater.sheetWeight */

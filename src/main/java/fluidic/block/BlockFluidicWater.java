@@ -105,6 +105,15 @@ public class BlockFluidicWater extends BlockStaticLiquid {
         if(world.isRemote || !FluidicWater.isFinite(world)) return;
         // Water Fluidlogged API keeps inside a block, the block here is not water. The simulation looks after it.
         if(!FluidicWater.isWater(world.getBlockState(pos))) return;
+        if(FluidicWater.vanillaRules) {
+            // Vanilla water neither dries up nor levels out. Water that was never checked, like a spring placed while its
+            // chunk was generated, is: flowing water, and sources with somewhere to flow.
+            WaterSimulation simulation = SimManager.get(world);
+            if(simulation != null && simulation.isRemoving(pos)) return;
+            IBlockState below = world.getBlockState(pos.down());
+            if(state.getValue(LEVEL) != 0 || hasDryNeighbor(world, pos) || !below.getMaterial().isLiquid() && Terrain.isOpen(below)) neighborChanged(world, pos, state);
+            return;
+        }
         int level = FluidicWater.level(state);
         boolean waterAbove = world.getBlockState(pos.up()).getMaterial().isLiquid();
         // A full block under more water, the inside of a lake or the sea, neither moves nor dries up. Most random
@@ -259,7 +268,8 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     @Override
     @Nonnull
     protected Vec3d getFlow(@Nonnull IBlockAccess access, @Nonnull BlockPos pos, @Nonnull IBlockState state) {
-        if(!FluidicWater.isFinite(access)) return super.getFlow(access, pos, state);
+        // Under vanilla's rules settled water is flowing water at its levels, it pushes and is drawn flowing the vanilla way
+        if(!FluidicWater.isFinite(access) || FluidicWater.vanillaRules) return super.getFlow(access, pos, state);
         if(!(access instanceof World)) return Vec3d.ZERO;
         World world = (World)access;
         float here = FluidicWater.level(state);
@@ -320,18 +330,19 @@ public class BlockFluidicWater extends BlockStaticLiquid {
 
     /**
      * Rays that look for liquids, like an empty bucket's, hit water of any level. Vanilla only lets them hit full
-     * water, partly filled vanilla water is flowing water, but Fluidic water is still at every level.
+     * water, partly filled vanilla water is flowing water, but Fluidic water is still at every level. Under vanilla's
+     * rules it is flowing water again, only sources are hit.
      */
     @Override
     public boolean canCollideCheck(@Nonnull IBlockState state, boolean hitIfLiquid) {
-        return hitIfLiquid;
+        return hitIfLiquid && (!FluidicWater.vanillaRules || state.getValue(LEVEL) == 0);
     }
 
     /** Half a block or less blocks little light, so grass under a puddle keeps growing */
     @Override
     @SuppressWarnings("deprecation")
     public int getLightOpacity(@Nonnull IBlockState state) {
-        return FluidicWater.level(state) > Water.LEVELS / 2 ? lightOpacity : 1;
+        return FluidicWater.vanillaRules || FluidicWater.level(state) > Water.LEVELS / 2 ? lightOpacity : 1;
     }
 
     @Override
@@ -396,7 +407,7 @@ public class BlockFluidicWater extends BlockStaticLiquid {
     @Override
     @SideOnly(Side.CLIENT)
     public void randomDisplayTick(@Nonnull IBlockState state, @Nonnull World world, @Nonnull BlockPos pos, @Nonnull Random rand) {
-        if(!FluidicWater.isFinite(world)) {
+        if(!FluidicWater.isFinite(world) || FluidicWater.vanillaRules) {
             super.randomDisplayTick(state, world, pos, rand);
             return;
         }

@@ -108,6 +108,17 @@ in 16³ sections that line up with chunk sections. Particles (SPH or similar) we
   simulated, water flows and makes new sources as in vanilla, and buckets, lily pads, boats and rendering behave
   the vanilla way. Clients learn the list when they join. A powered fountain there places a water source in front
   of it, removed again when the signal stops, and a drain deletes the water touching it.
+* **Vanilla water physics**. With the `Vanilla Water Physics` server option water follows vanilla's rules instead of
+  keeping its volume (`VanillaFlow`): sources are endless, the water flowing from them is a level lower with every
+  block, flows towards the nearest drop and dries up when its source is gone, water under water is falling water, and
+  two sources beside a block over solid ground or a source make it a source. The simulation still moves it, every 5
+  ticks like vanilla water, and it settles into water blocks of vanilla's levels, so it still flows through stairs,
+  slabs, ladders and open doors, stays inside them as simulated water, and is drawn up to glass panes. Rain,
+  evaporation, endless oceans, sponge capacity, partly filled buckets, the fluid handlers and leaves holding water are
+  left out: buckets and sponges work the vanilla way, leaves block water, fountains place a source while powered and
+  drains delete the water touching them. Clients learn the setting when they join. It is not exact to the tick, and
+  not meant for worlds played with it off: partly filled water left there is flowing water without a source and
+  drains away when something disturbs it.
 * **Lily pads**. Lily pads float on water more than half full, simulated water too, and follow the water
   level (`LilyPads`): water rising into a pad lifts it, and a pad whose water went down sinks to the new
   surface up to 4 blocks below. They only break when there is no water near enough.

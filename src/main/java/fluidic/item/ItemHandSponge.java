@@ -73,7 +73,7 @@ public class ItemHandSponge extends Item {
         int room = Water.LEVELS - water(stack);
         int taken;
         IBlockState state = world.getBlockState(pos);
-        if(!FluidicWater.isFinite(world)) {
+        if(!FluidicWater.isFiniteVolume(world)) {
             // Vanilla water comes in whole sources, a source block soaks the sponge
             taken = FluidicWater.isWater(state) && state.getValue(BlockLiquid.LEVEL) == 0 ? room : 0;
             if(taken > 0 && !world.isRemote) world.setBlockToAir(pos);

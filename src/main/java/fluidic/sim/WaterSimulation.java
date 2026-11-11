@@ -132,6 +132,12 @@ public final class WaterSimulation {
     // ---------------------------------------------------------------- simulation thread state
 
     private final Long2ObjectOpenHashMap<WaterSection> sections = new Long2ObjectOpenHashMap<>();
+    /**
+     * Water follows vanilla's rules, the Vanilla Water Physics server option as it was when the world loaded. Steps move
+     * the water with {@link VanillaFlow}, and what only makes sense for water that keeps its volume is left out.
+     */
+    private final boolean vanilla = FluidicWater.vanillaRules;
+    private final VanillaFlow vanillaFlow = new VanillaFlow(sections);
     /** Water heights last sent to clients, 255 = full block, for entity physics on the server thread */
     private final SectionHeights published = new SectionHeights();
     private final ArrayList<WaterSection> stepList = new ArrayList<>();
@@ -212,10 +218,20 @@ public final class WaterSimulation {
     }
 
     /** Water of a woken block, the block is removed once the step that adds the water sent it to clients */
-    private void addWoken(BlockPos pos, int amount, byte code) {
+    private void addWoken(BlockPos pos, int amount, byte code, byte kind) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         long packed = pos.toLong();
-        enqueue(sim -> sim.doAddWoken(x, y, z, amount, packed, code));
+        enqueue(sim -> sim.doAddWoken(x, y, z, amount, packed, code, kind));
+    }
+
+    /** Takes the simulated water out of a block, like a fountain under vanilla's rules taking back its source */
+    public void clearWater(BlockPos pos) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        enqueue(sim -> {
+            WaterSection section = sim.readySection(x, y, z);
+            int i = Water.cellIndex(x & 15, y & 15, z & 15);
+            if(section != null && section.mass[i] > 0) section.setCell(i, 0, VanillaFlow.FLOWING);
+        });
     }
 
     public void addRain(BlockPos pos, int amount) {
@@ -286,6 +302,12 @@ public final class WaterSimulation {
         if(isRemoving(pos)) return;
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         byte[] codes = Terrain.neighbors(world, pos);
+        if(vanilla) {
+            // The block is worked out as the simulated water it would be, and woken if anything would change
+            byte self = Terrain.classify(world, pos, world.getBlockState(pos));
+            enqueue(sim -> sim.doNeighborCheckVanilla(x, y, z, self, codes));
+            return;
+        }
         // An ocean or river below sea level fills up open sky above it, so a river that lost water rises again
         boolean fillUp = reservoir && y + 1 < world.getSeaLevel() && FluidicWater.isUnderSky(world, pos.up());
         enqueue(sim -> sim.doNeighborCheck(x, y, z, level, reservoir, fillUp, codes));
@@ -446,6 +468,16 @@ public final class WaterSimulation {
             int level = step.settleLevels.getInt(n);
             if(!world.isBlockLoaded(pos)) continue;
             IBlockState state = world.getBlockState(pos);
+            if(vanilla) {
+                // The level is vanilla's, see VanillaFlow.metaOf. Water a block took the place of since the step ran is
+                // gone, and water placed there since stays as it is.
+                if(!FluidicWater.isWater(state) && Terrain.isOpen(state)) {
+                    if(state.getMaterial() != Material.AIR) state.getBlock().dropBlockAsItem(world, pos, state, 0);
+                    place(pos, FluidicWater.vanillaState(level), 3);
+                }
+                setTerrain(pos, Terrain.classify(world, pos, world.getBlockState(pos)));
+                continue;
+            }
             if(FluidicWater.isWater(state)) {
                 level = Math.max(level, FluidicWater.level(state));
             }
@@ -507,12 +539,14 @@ public final class WaterSimulation {
             if(FluidicWater.isWater(state) && !FluidicWater.isReservoir(world, pos, state) && startRemoving(pos.toLong())) {
                 // The world listener is not told about changes in unpopulated chunks, so open the cell directly
                 setTerrain(pos, WaterSection.OPEN);
-                addWoken(pos, FluidicWater.level(state) * Water.UNIT, WaterSection.OPEN);
+                addWoken(pos, FluidicWater.level(state) * Water.UNIT, WaterSection.OPEN, vanilla ? VanillaFlow.kindOf(state.getValue(BlockLiquid.LEVEL)) : VanillaFlow.FLOWING);
             }
             else if(Terrain.storesWater(state) && FluidloggedCompat.waterLevel(world, pos) > 0 && startRemoving(pos.toLong())) {
-                // Water kept inside a block by Fluidlogged API flows on, the block stays
+                // Water kept inside a block by Fluidlogged API flows on, the block stays. Its full water is a source
+                // under vanilla's rules.
+                int level = FluidloggedCompat.waterLevel(world, pos);
                 setTerrain(pos, Terrain.classify(state));
-                addWoken(pos, FluidloggedCompat.waterLevel(world, pos) * Water.UNIT, Terrain.classify(state));
+                addWoken(pos, level * Water.UNIT, Terrain.classify(state), vanilla && level == Water.LEVELS ? VanillaFlow.SOURCE : VanillaFlow.FLOWING);
             }
             else {
                 setTerrain(pos, Terrain.classify(world, pos, state));
@@ -722,25 +756,30 @@ public final class WaterSimulation {
         ForgeConfigHandler.ServerConfig config = ForgeConfigHandler.server;
         final double leafAbsorption = config.leafAbsorption;
 
+        // Vanilla water moves every few ticks, the steps between only carry out commands and settle what came to rest
+        boolean flowStep = !vanilla || step % VanillaFlow.INTERVAL == 0;
         stepList.clear();
         for(WaterSection section : sections.values()) {
             section.maxFlow = 0;
-            if(section.needsStep()) {
+            if(flowStep && section.needsStep()) {
                 linkNeighbors(section);
                 stepList.add(section);
             }
         }
 
-        // Phase 1: every section computes its outflows from the same masses, in parallel
-        if(stepList.size() >= PARALLEL_THRESHOLD) {
-            SimManager.pool().submit(() -> stepList.parallelStream().forEach(section -> section.computeFlows(step, leafAbsorption, seaLevel))).join();
-        }
+        if(vanilla) vanillaFlow.step(stepList);
         else {
-            for(WaterSection section : stepList) section.computeFlows(step, leafAbsorption, seaLevel);
-        }
+            // Phase 1: every section computes its outflows from the same masses, in parallel
+            if(stepList.size() >= PARALLEL_THRESHOLD) {
+                SimManager.pool().submit(() -> stepList.parallelStream().forEach(section -> section.computeFlows(step, leafAbsorption, seaLevel))).join();
+            }
+            else {
+                for(WaterSection section : stepList) section.computeFlows(step, leafAbsorption, seaLevel);
+            }
 
-        // Phase 2: move the water, cheap and serial since flows cross section borders
-        for(WaterSection section : stepList) section.applyFlows();
+            // Phase 2: move the water, cheap and serial since flows cross section borders
+            for(WaterSection section : stepList) section.applyFlows();
+        }
         for(WaterSection section : stepList) countSoaks(section);
         for(WaterSection section : stepList) mergeIntoReservoirs(section);
 
@@ -796,7 +835,7 @@ public final class WaterSimulation {
             if(section.rain != null && step % RAIN_RELEASE_STEPS == 0) section.releaseRain();
             if(section.dormant) {
                 section.idleSteps = 0;
-                if(step % EVAPORATE_STEPS == 0) {
+                if(!vanilla && step % EVAPORATE_STEPS == 0) {
                     linkNeighbors(section);
                     if(section.evaporate(random, evaporation, absorption, seaLevel, false)) section.dirtyNet = true;
                 }
@@ -805,7 +844,7 @@ public final class WaterSimulation {
                 section.idleSteps = 0;
                 // Thin water dries up even while the section never comes to rest, a film left by rain would otherwise
                 // stay for good wherever a little water keeps moving
-                if(step % EVAPORATE_STEPS == 0) {
+                if(!vanilla && step % EVAPORATE_STEPS == 0) {
                     linkNeighbors(section);
                     if(section.evaporate(random, evaporation, absorption, seaLevel, true)) section.dirtyNet = true;
                 }
@@ -813,7 +852,7 @@ public final class WaterSimulation {
                 // water still pouring in joins up with more of the body later
                 if(section.maxFlow > PRESSURE_RESET_FLOW || step % PRESSURE_RECHECK_STEPS == 0) section.levelled = false;
                 // Levelled a little at a time while the water only moves slowly, see equalizePressure
-                if(!section.levelled && !section.pending && section.maxFlow <= PRESSURE_FLOW_MAX && step % PRESSURE_STEPS == 0) equalizePressure(section);
+                if(!vanilla && !section.levelled && !section.pending && section.maxFlow <= PRESSURE_FLOW_MAX && step % PRESSURE_STEPS == 0) equalizePressure(section);
                 if(section.pending || section.touched || section.maxFlow > Water.QUIET_FLOW) {
                     section.quietSteps = 0;
                     section.driftWindows = 0;
@@ -822,7 +861,11 @@ public final class WaterSimulation {
                 }
                 else {
                     if(section.quietSteps == 0) section.startQuiet();
-                    if(++section.quietSteps >= config.settleSteps && settlesNow(section, config)) {
+                    // Vanilla water has no puddles to wait for and no pressure to find its level by
+                    if(vanilla) {
+                        if(++section.quietSteps >= Math.max(config.settleSteps, 2 * VanillaFlow.INTERVAL)) settleVanilla(section);
+                    }
+                    else if(++section.quietSteps >= config.settleSteps && settlesNow(section, config)) {
                         // Still finding its level through pressure too slight to count as flowing, like water rising up
                         // the far side of a U bend. Settled now it would stop well short, the surfaces joined through full
                         // water are levelled first and it comes to rest again.
@@ -885,8 +928,9 @@ public final class WaterSimulation {
                 String[] states = {"pending terrain", "frozen", "ready"};
                 int i = Water.cellIndex(x & 15, y & 15, z & 15);
                 String terrain = section.terrain == null ? "none" : String.valueOf(section.terrain[i]);
-                return String.format("section %s, terrain %s, mass %d/%d, section quiet %d steps, %d wet cells",
-                        states[section.state], terrain, section.mass[i], Water.FULL, section.quietSteps, section.filled);
+                String kind = !vanilla ? "" : section.kind(i) == VanillaFlow.SOURCE ? " source" : section.kind(i) == VanillaFlow.FALLING ? " falling" : " flowing";
+                return String.format("section %s, terrain %s, mass %d/%d%s, section quiet %d steps, %d wet cells",
+                        states[section.state], terrain, section.mass[i], Water.FULL, kind, section.quietSteps, section.filled);
             }).get(5, TimeUnit.SECONDS);
         }
         catch(Exception ex) {
@@ -1007,6 +1051,26 @@ public final class WaterSimulation {
                 result.settles.add(blockPos(section, i));
                 result.settleLevels.add(level);
             }
+        }
+        section.afterSettle();
+        section.quietSteps = 0;
+        flushNet(section, true);
+    }
+
+    /**
+     * Turns a section that stopped changing into real blocks under vanilla's rules: sources, flowing water at its level
+     * and falling water, see VanillaFlow.metaOf. Water inside a block, like stairs or a ladder, stays simulated.
+     */
+    private void settleVanilla(WaterSection section) {
+        for(int i = 0; i < 4096; i++) {
+            int mass = section.mass[i];
+            if(mass == 0 || section.terrain[i] != WaterSection.OPEN) continue;
+            byte kind = section.kind(i);
+            section.mass[i] = 0;
+            section.setKind(i, VanillaFlow.FLOWING);
+            section.terrain[i] = VanillaFlow.settledCode(mass, kind);
+            result.settles.add(blockPos(section, i));
+            result.settleLevels.add(VanillaFlow.metaOf(mass, kind));
         }
         section.afterSettle();
         section.quietSteps = 0;
@@ -1374,19 +1438,20 @@ public final class WaterSimulation {
 
     // ---------------------------------------------------------------- commands
 
-    private void doAddWoken(int x, int y, int z, int amount, long packed, byte code) {
+    private void doAddWoken(int x, int y, int z, int amount, long packed, byte code, byte kind) {
         if(y < 0 || y > 255) return;
         long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
         WaterSection section = sections.get(key);
         if(section == null) section = createPending(key);
         if(section.state == WaterSection.STATE_PENDING) {
-            section.defer(() -> doAddWoken(x, y, z, amount, packed, code));
+            section.defer(() -> doAddWoken(x, y, z, amount, packed, code, kind));
             return;
         }
         // A snapshot taken while the block was still there has it as settled water
         int i = Water.cellIndex(x & 15, y & 15, z & 15);
         if(section.state == WaterSection.STATE_READY && (section.terrain[i] >= WaterSection.SETTLED || section.terrain[i] == WaterSection.WAKING)) applyTerrain(section, i, code);
-        doAddWater(x, y, z, amount, true);
+        if(vanilla) doSetVanilla(x, y, z, amount, kind);
+        else doAddWater(x, y, z, amount, true);
         result.woken.add(packed);
         // Sent this step whatever the network interval, the block goes when the server applies it
         wokenThisStep = true;
@@ -1403,6 +1468,12 @@ public final class WaterSimulation {
      */
     private void doAddWater(int x, int y, int z, int amount, boolean allowUp, boolean rain) {
         if(amount <= 0 || y < 0 || y > 255) return;
+        if(vanilla) {
+            // Vanilla water comes in sources, less than a block of it is flowing water that dries up
+            if(amount >= Water.FULL) doSetVanilla(x, y, z, Water.FULL, VanillaFlow.SOURCE);
+            else if(amount >= Water.UNIT) doSetVanilla(x, y, z, amount / Water.UNIT * Water.UNIT, VanillaFlow.FLOWING);
+            return;
+        }
         long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
         WaterSection section = sections.get(key);
         if(section == null) section = createPending(key);
@@ -1429,6 +1500,23 @@ public final class WaterSimulation {
         else if(allowUp) {
             doAddWater(x, y + 1, z, amount, false, rain);
         }
+    }
+
+    /** Puts water into a cell under vanilla's rules, a kind of VanillaFlow with the mass of its level */
+    private void doSetVanilla(int x, int y, int z, int mass, byte kind) {
+        if(mass <= 0 || y < 0 || y > 255) return;
+        long key = Water.sectionKey(x >> 4, y >> 4, z >> 4);
+        WaterSection section = sections.get(key);
+        if(section == null) section = createPending(key);
+        if(section.state == WaterSection.STATE_PENDING) {
+            section.defer(() -> doSetVanilla(x, y, z, mass, kind));
+            return;
+        }
+        int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        // Its chunk is not loaded, the water waits there and moves on once the chunk loads again
+        if(section.state == WaterSection.STATE_READY && !WaterSection.isOpen(section.terrain[i])) return;
+        section.setCell(i, mass, kind);
+        section.touched = true;
     }
 
     private void doTakeWater(int x, int y, int z, int amount, int reach, long take) {
@@ -1516,6 +1604,8 @@ public final class WaterSimulation {
             section.removeMass(i, mass);
             section.dirtyNet = true;
             int x = section.sx * 16 + (i & 15), y = section.sy * 16 + (i >> 8), z = section.sz * 16 + ((i >> 4) & 15);
+            // Vanilla water a block takes the place of is gone
+            if(vanilla) return;
             if(mass >= Water.FULL || hasWater(x, y + 1, z) || !doDisplaceSideways(x, y, z, mass)) doAddWater(x, y + 1, z, mass, false);
         }
     }
@@ -1578,7 +1668,8 @@ public final class WaterSimulation {
             if(ns == null || ns.state != WaterSection.STATE_READY) continue;
             int ni = WaterSection.neighborIndex(i, dir);
             int code = ns.terrain[ni];
-            if(code >= WaterSection.SETTLED && (dir == Water.UP || code - WaterSection.SETTLED >= 2)) {
+            // Vanilla water flows on at any level
+            if(code >= WaterSection.SETTLED && (dir == Water.UP || vanilla || code - WaterSection.SETTLED >= 2)) {
                 ns.terrain[ni] = WaterSection.WAKING;
                 result.wakes.add(blockPos(ns, ni));
             }
@@ -1602,7 +1693,7 @@ public final class WaterSimulation {
             int mass = section.mass[i];
             if(mass > 0 && !WaterSection.holds(terrain[i])) {
                 section.removeMass(i, mass);
-                doAddWater(section.sx * 16 + (i & 15), section.sy * 16 + (i >> 8) + 1, section.sz * 16 + ((i >> 4) & 15), mass, false);
+                if(!vanilla) doAddWater(section.sx * 16 + (i & 15), section.sy * 16 + (i >> 8) + 1, section.sz * 16 + ((i >> 4) & 15), mass, false);
             }
         }
         List<Runnable> deferred = section.deferred;
@@ -1705,6 +1796,25 @@ public final class WaterSimulation {
         result.wakes.add(new BlockPos(x, y, z).toLong());
     }
 
+    /**
+     * A settled water block saw a neighbour change, under vanilla's rules. It is woken when it would not stay as it is as
+     * simulated water: its level changes, like flowing water whose source is gone, or it flows on into a dry block.
+     */
+    private void doNeighborCheckVanilla(int x, int y, int z, byte self, byte[] codes) {
+        if(self < WaterSection.SETTLED) return;
+        WaterSection section = readySection(x, y, z);
+        int i = Water.cellIndex(x & 15, y & 15, z & 15);
+        if(section != null && section.terrain[i] == WaterSection.WAKING) return;
+        // The codes come fresh from the world, catch up in case the change was not reported
+        doSetTerrain(x, y, z, self);
+        for(int dir = 0; dir < 6; dir++) {
+            doSetTerrain(x + Water.DX[dir], y + Water.DY[dir], z + Water.DZ[dir], codes[dir]);
+        }
+        if(!vanillaFlow.wouldChange(x, y, z, self, codes)) return;
+        if(section != null) section.terrain[i] = WaterSection.WAKING;
+        result.wakes.add(new BlockPos(x, y, z).toLong());
+    }
+
     private void doSendChunk(UUID player, int cx, int cz) {
         for(int sy = 0; sy < 16; sy++) {
             WaterSection section = sections.get(Water.sectionKey(cx, sy, cz));
@@ -1731,13 +1841,28 @@ public final class WaterSimulation {
         for(WaterSection section : sections.values()) section.releaseRain();
 
         Long2ObjectOpenHashMap<int[]> adjusted = new Long2ObjectOpenHashMap<>();
+        // Under vanilla's rules, what the settled water put back is, by section like the masses
+        Long2ObjectOpenHashMap<byte[]> kinds = new Long2ObjectOpenHashMap<>();
         for(StepResult step : handedOff) {
             if(step.seq <= savedThrough) continue;
             for(int n = 0; n < step.settles.size(); n++) {
                 BlockPos pos = BlockPos.fromLong(step.settles.getLong(n));
                 if(pos.getY() < 0 || pos.getY() > 255) continue;
-                adjustedMass(adjusted, Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4))
-                        [Water.cellIndex(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15)] += step.settleLevels.getInt(n) * Water.UNIT;
+                long key = Water.sectionKey(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
+                int i = Water.cellIndex(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+                int level = step.settleLevels.getInt(n);
+                if(!vanilla) {
+                    adjustedMass(adjusted, key)[i] += level * Water.UNIT;
+                    continue;
+                }
+                // The level is vanilla's, see settleVanilla
+                adjustedMass(adjusted, key)[i] = VanillaFlow.massOf(level);
+                byte[] kind = kinds.get(key);
+                if(kind == null) {
+                    WaterSection section = sections.get(key);
+                    kinds.put(key, kind = section == null || section.kind == null ? new byte[4096] : section.kind.clone());
+                }
+                kind[i] = VanillaFlow.kindOf(level);
             }
         }
         for(Long2IntMap.Entry entry : inWorld.long2IntEntrySet()) takeBack(adjusted, BlockPos.fromLong(entry.getLongKey()), entry.getIntValue());
@@ -1745,9 +1870,10 @@ public final class WaterSimulation {
         NBTTagList list = new NBTTagList();
         for(WaterSection section : sections.values()) {
             int[] mass = adjusted.remove(section.key);
-            appendCells(list, section.key, mass == null ? section.mass : mass);
+            byte[] kind = kinds.get(section.key);
+            appendCells(list, section.key, mass == null ? section.mass : mass, kind == null ? section.kind : kind);
         }
-        for(Long2ObjectMap.Entry<int[]> entry : adjusted.long2ObjectEntrySet()) appendCells(list, entry.getLongKey(), entry.getValue());
+        for(Long2ObjectMap.Entry<int[]> entry : adjusted.long2ObjectEntrySet()) appendCells(list, entry.getLongKey(), entry.getValue(), kinds.get(entry.getLongKey()));
         NBTTagList soaked = new NBTTagList();
         for(Long2IntMap.Entry entry : sponges.long2IntEntrySet()) {
             NBTTagCompound tag = new NBTTagCompound();
@@ -1771,14 +1897,17 @@ public final class WaterSimulation {
         public void accept(WaterSimulation simulation) {}
     }
 
-    private static void appendCells(NBTTagList list, long key, int[] mass) {
+    /** The wet cells of a section, with what their water is under vanilla's rules, see WaterSection.kind, null for none */
+    private static void appendCells(NBTTagList list, long key, int[] mass, byte[] kind) {
         int filled = 0;
         for(int m : mass) if(m > 0) filled++;
         if(filled == 0) return;
         int[] cells = new int[filled * 2];
+        byte[] kinds = kind == null ? null : new byte[filled];
         int n = 0;
         for(int i = 0; i < 4096; i++) {
             if(mass[i] > 0) {
+                if(kinds != null) kinds[n / 2] = kind[i];
                 cells[n++] = i;
                 cells[n++] = mass[i];
             }
@@ -1786,6 +1915,8 @@ public final class WaterSimulation {
         NBTTagCompound tag = new NBTTagCompound();
         tag.setLong("key", key);
         tag.setIntArray("cells", cells);
+        // One per wet cell, in the order of the cells
+        if(kinds != null) tag.setByteArray("kinds", kinds);
         list.appendTag(tag);
     }
 
@@ -1825,8 +1956,11 @@ public final class WaterSimulation {
             WaterSection section = sections.get(key);
             if(section == null) section = createPending(key);
             int[] cells = tag.getIntArray("cells");
+            byte[] kinds = tag.getByteArray("kinds");
             for(int c = 0; c + 1 < cells.length; c += 2) {
-                if(cells[c] >= 0 && cells[c] < 4096 && cells[c + 1] > 0) section.addMass(cells[c], cells[c + 1]);
+                if(cells[c] < 0 || cells[c] >= 4096 || cells[c + 1] <= 0) continue;
+                section.addMass(cells[c], cells[c + 1]);
+                if(vanilla && c / 2 < kinds.length) section.setKind(cells[c], kinds[c / 2]);
             }
         }
         NBTTagList soaked = root.getTagList("sponges", Constants.NBT.TAG_COMPOUND);

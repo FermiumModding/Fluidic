@@ -8,6 +8,7 @@ import fluidic.compat.FluidloggedCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockConcretePowder;
 import net.minecraft.block.BlockDoor;
+import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.BlockSponge;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.properties.IProperty;
@@ -88,7 +89,11 @@ public final class Terrain {
     /** Terrain code of a block state, without the position, so reservoir water counts as plain settled water */
     public static byte classify(IBlockState state) {
         Block block = state.getBlock();
-        if(FluidicWater.isWater(state)) return (byte)(WaterSection.SETTLED + FluidicWater.level(state));
+        if(FluidicWater.isWater(state)) {
+            // Under vanilla's rules falling water is told from sources, both fill their block
+            if(FluidicWater.vanillaRules && state.getValue(BlockLiquid.LEVEL) >= 8) return WaterSection.SETTLED_FALLING;
+            return (byte)(WaterSection.SETTLED + FluidicWater.level(state));
+        }
         if(block == Blocks.SPONGE && !state.getValue(BlockSponge.WET)) return WaterSection.SPONGE;
         if(block instanceof BlockDrain) return WaterSection.DRAIN;
         StateTable table = cache;
@@ -97,6 +102,10 @@ public final class Terrain {
         byte code = configured(state);
         if(code == UNSET) code = fallback(state);
         if(code == THIN) code = WaterSection.SOLID_SMOOTH;
+        // Under vanilla's rules water flows through leaves and the like as through ladders, it stays simulated inside them.
+        // Dripping through and filling up from below has no counterpart in vanilla's flow. The table is dropped when the
+        // rules change.
+        if(code == WaterSection.POROUS && FluidicWater.vanillaRules) code = WaterSection.PERMEABLE;
         table.put(state, code);
         return code;
     }
@@ -417,7 +426,7 @@ public final class Terrain {
             return terrain;
         }
         // Full water below sea level may be part of an ocean or river
-        boolean belowSea = sy * 16 < world.getSeaLevel();
+        boolean belowSea = sy * 16 < world.getSeaLevel() && !FluidicWater.vanillaRules;
         boolean fluidlogged = FluidloggedCompat.isLoaded();
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for(int z = 0; z < 16; z++) {

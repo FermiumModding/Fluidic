@@ -37,7 +37,8 @@ final class WaterWorldListener implements IWorldEventListener {
         // World generation places blocks by the thousand, mostly where nothing is simulated. Simulated sections it
         // reaches catch up with their next terrain refresh.
         if(FluidicWater.generating > 0) return;
-        if(!FluidicWater.placing && FluidicWater.isWater(oldState) && !FluidicWater.isWater(newState)) displaced(world, pos, oldState, newState);
+        // Vanilla water a block takes the place of is gone
+        if(!FluidicWater.vanillaRules && !FluidicWater.placing && FluidicWater.isWater(oldState) && !FluidicWater.isWater(newState)) displaced(world, pos, oldState, newState);
         // Thin blocks never join water, air or plants, water settling and drying beside them changes nothing
         if(oldState.getMaterial().blocksMovement() || newState.getMaterial().blocksMovement()) thinBlocksBeside(world, pos);
         if(Terrain.isDoor(oldState) || Terrain.isDoor(newState)) {

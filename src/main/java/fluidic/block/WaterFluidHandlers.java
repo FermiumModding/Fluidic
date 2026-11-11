@@ -37,7 +37,7 @@ public final class WaterFluidHandlers {
     /** The handler for the water at a position, null to leave it to Forge: no water there, or a block with its own */
     @Nullable
     public static IFluidHandler get(World world, BlockPos pos) {
-        if(!FluidicWater.isFinite(world) || !world.isBlockLoaded(pos)) return null;
+        if(!FluidicWater.isFiniteVolume(world) || !world.isBlockLoaded(pos)) return null;
         IBlockState state = world.getBlockState(pos);
         if(FluidicWater.isWater(state)) return new BlockHandler(world, pos);
         if(state.getBlock().hasTileEntity(state) || !Terrain.isOpen(state) && !Terrain.holdsWater(state)) return null;
@@ -50,7 +50,7 @@ public final class WaterFluidHandlers {
      * would put a source block in place of the water there.
      */
     public static boolean pourOnTop(@Nullable EntityPlayer player, @Nullable World world, @Nullable BlockPos pos, IFluidHandler source, @Nullable FluidStack resource) {
-        if(world == null || pos == null || !isWater(resource) || resource.amount < Fluid.BUCKET_VOLUME || !FluidicWater.isFinite(world)) return false;
+        if(world == null || pos == null || !isWater(resource) || resource.amount < Fluid.BUCKET_VOLUME || !FluidicWater.isFiniteVolume(world)) return false;
         if(!world.isBlockLoaded(pos) || !FluidicWater.isWater(world.getBlockState(pos)) || world.provider.doesWaterVaporize()) return false;
         // The client only predicts the container emptying, the server adds the water
         WaterSimulation simulation = SimManager.get(world);

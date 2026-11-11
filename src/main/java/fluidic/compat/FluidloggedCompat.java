@@ -1,5 +1,6 @@
 package fluidic.compat;
 
+import fluidic.block.FluidicWater;
 import fluidic.sim.Terrain;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
@@ -38,10 +39,11 @@ public final class FluidloggedCompat {
 
     /**
      * Whether water settling in a block, a block it can be inside like stairs or a ladder, is kept there as a fluid
-     * state. Not plants that water washes away.
+     * state. Not plants that water washes away. Not under vanilla's rules either, its fluid states do not tell sources
+     * from falling water, the water stays simulated.
      */
     public static boolean canStore(World world, BlockPos pos, IBlockState state) {
-        return isLoaded() && Terrain.storesWater(state) && FluidloggedBridge.canStoreWater(world, pos, state);
+        return isLoaded() && !FluidicWater.vanillaRules && Terrain.storesWater(state) && FluidloggedBridge.canStoreWater(world, pos, state);
     }
 
     /** Sets the water stored inside the block at a position, 0 removes it, without reporting it to the simulation */

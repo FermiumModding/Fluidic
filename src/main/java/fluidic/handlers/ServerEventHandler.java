@@ -44,6 +44,7 @@ public class ServerEventHandler {
 
     @SubscribeEvent
     public static void onWorldLoad(WorldEvent.Load event) {
+        if(event.getWorld() instanceof WorldServer) FluidicWater.setVanillaRules(ForgeConfigHandler.server.vanillaWaterPhysics);
         // Dimensions keeping vanilla water simulate nothing
         if(event.getWorld() instanceof WorldServer && ForgeConfigHandler.server.enableSimulation && FluidicWater.isFinite(event.getWorld())) {
             SimManager.load((WorldServer)event.getWorld());
@@ -54,7 +55,7 @@ public class ServerEventHandler {
     @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if(event.player instanceof EntityPlayerMP) {
-            PacketHandler.INSTANCE.sendTo(new MessageVanillaDimensions(ForgeConfigHandler.server.vanillaWaterDimensions.clone()), (EntityPlayerMP)event.player);
+            PacketHandler.INSTANCE.sendTo(new MessageVanillaDimensions(ForgeConfigHandler.server.vanillaWaterDimensions.clone(), FluidicWater.vanillaRules), (EntityPlayerMP)event.player);
         }
     }
 
@@ -76,7 +77,8 @@ public class ServerEventHandler {
         FluidicWater.generating = 0;
         WaterSimulation simulation = SimManager.get(event.world);
         if(simulation == null) return;
-        rain((WorldServer)event.world, simulation);
+        // Vanilla water takes no rain
+        if(!FluidicWater.vanillaRules) rain((WorldServer)event.world, simulation);
         simulation.tick();
     }
 

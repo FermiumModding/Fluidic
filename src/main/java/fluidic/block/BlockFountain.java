@@ -74,11 +74,14 @@ public class BlockFountain extends Block {
         if(powered == state.getValue(POWERED)) return;
         world.setBlockState(pos, state.withProperty(POWERED, powered), 2);
         if(powered) world.scheduleUpdate(pos, this, 1);
-        else if(!FluidicWater.isFinite(world)) {
+        else if(!FluidicWater.isFiniteVolume(world)) {
             // The vanilla water source it placed goes, the water flowing from it dries up
             BlockPos front = pos.offset(state.getValue(FACING));
             IBlockState water = world.getBlockState(front);
             if(FluidicWater.isWater(water) && water.getValue(BlockLiquid.LEVEL) == 0) world.setBlockToAir(front);
+            // Under vanilla's rules the source may be flowing on as simulated water just now
+            WaterSimulation simulation = SimManager.get(world);
+            if(simulation != null) simulation.clearWater(front);
         }
     }
 
@@ -117,7 +120,7 @@ public class BlockFountain extends Block {
             }
             return;
         }
-        if(!FluidicWater.isFinite(world)) {
+        if(!FluidicWater.isFiniteVolume(world)) {
             // Vanilla water is endless already, a source in front pours as much as it likes
             if(!world.isBlockLoaded(front)) return;
             IBlockState state = world.getBlockState(front);

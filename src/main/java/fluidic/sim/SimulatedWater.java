@@ -51,6 +51,8 @@ public final class SimulatedWater {
     private static boolean counts(World world, int x, int y, int z, int height) {
         if(height > HALF) return true;
         if(height == 0) return false;
+        // Flowing water of any depth, as vanilla's counts
+        if(FluidicWater.vanillaRules) return true;
         return height(world, x, y - 1, z) > 0 || (y > 0 && world.getBlockState(new BlockPos(x, y - 1, z)).getMaterial().isLiquid());
     }
 

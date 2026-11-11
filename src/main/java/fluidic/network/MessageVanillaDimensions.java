@@ -16,11 +16,14 @@ public class MessageVanillaDimensions implements IMessage {
     private static final int MAX_DIMENSIONS = 4096;
 
     private int[] dimensions;
+    /** Whether water outside those dimensions follows vanilla's rules, see FluidicWater.vanillaRules */
+    private boolean vanillaRules;
 
     public MessageVanillaDimensions() {}
 
-    public MessageVanillaDimensions(int[] dimensions) {
+    public MessageVanillaDimensions(int[] dimensions, boolean vanillaRules) {
         this.dimensions = dimensions;
+        this.vanillaRules = vanillaRules;
     }
 
     @Override
@@ -29,12 +32,14 @@ public class MessageVanillaDimensions implements IMessage {
         if(count < 0 || count > MAX_DIMENSIONS) throw new IllegalArgumentException("Too many vanilla water dimensions: " + count);
         dimensions = new int[count];
         for(int n = 0; n < count; n++) dimensions[n] = buf.readInt();
+        vanillaRules = buf.readBoolean();
     }
 
     @Override
     public void toBytes(ByteBuf buf) {
         buf.writeInt(dimensions.length);
         for(int dimension : dimensions) buf.writeInt(dimension);
+        buf.writeBoolean(vanillaRules);
     }
 
     public static class Handler implements IMessageHandler<MessageVanillaDimensions, IMessage> {
@@ -42,6 +47,7 @@ public class MessageVanillaDimensions implements IMessage {
         @Override
         public IMessage onMessage(MessageVanillaDimensions message, MessageContext ctx) {
             FluidicWater.clientVanillaDimensions = message.dimensions;
+            FluidicWater.setVanillaRules(message.vanillaRules);
             return null;
         }
     }
